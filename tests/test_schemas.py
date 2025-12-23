@@ -40,13 +40,16 @@ def test_score_detail_invalid_range():
             formatting=3,
         )
     errors = excinfo.value.errors()
+
     assert any(
-        err.get("loc") == ("relevance",) and err.get("ctx", {}).get("ge") == 1
-        for err in errors
+        error["loc"] == ("relevance",)
+        and error.get("ctx", {}).get("ge") == 1
+        for error in errors
     )
     assert any(
-        err.get("loc") == ("accuracy",) and err.get("ctx", {}).get("le") == 5
-        for err in errors
+        error["loc"] == ("accuracy",)
+        and error.get("ctx", {}).get("le") == 5
+        for error in errors
     )
 
 
@@ -74,6 +77,7 @@ def test_metric_result_score_out_of_bounds():
         )
     errors = excinfo.value.errors()
     assert any(
-        err.get("loc") == ("score",) and err.get("ctx", {}).get("le") == 5.0
-        for err in errors
+        error["loc"] == ("score",)
+        and error.get("ctx", {}).get("le") == 5.0
+        for error in errors
     )
