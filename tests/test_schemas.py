@@ -39,9 +39,18 @@ def test_score_detail_invalid_range():
             clarity=3,
             formatting=3,
         )
-    message = str(excinfo.value)
-    assert "ge=1" in message
-    assert "le=5" in message
+    errors = excinfo.value.errors()
+
+    assert any(
+        error["loc"] == ("relevance",)
+        and error.get("ctx", {}).get("ge") == 1
+        for error in errors
+    )
+    assert any(
+        error["loc"] == ("accuracy",)
+        and error.get("ctx", {}).get("le") == 5
+        for error in errors
+    )
 
 
 def test_metric_result_missing_fields():
@@ -66,5 +75,9 @@ def test_metric_result_score_out_of_bounds():
             ),
             feedback="",
         )
-    message = str(excinfo.value)
-    assert "le=5.0" in message
+    errors = excinfo.value.errors()
+    assert any(
+        error["loc"] == ("score",)
+        and error.get("ctx", {}).get("le") == 5.0
+        for error in errors
+    )
