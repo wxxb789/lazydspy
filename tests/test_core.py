@@ -1,9 +1,16 @@
+import pathlib
+import sys
 import types
 
-import dspy
 import pytest
 
-from core import DeepSummarizer, SEED_PROMPT, WebSummarySignature
+# 确保 src 目录在导入路径中，便于加载占位模块。
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_PATH))
+
+import dspy  # noqa: E402  # isort: skip
+from core import DeepSummarizer, SEED_PROMPT, WebSummarySignature  # noqa: E402  # isort: skip
 
 
 def test_web_summary_signature_fields():
@@ -34,4 +41,3 @@ def test_deep_summarizer_forward_returns_summary(monkeypatch: pytest.MonkeyPatch
     assert output == "模拟摘要"
     assert call_args["content"] == "示例内容"
     assert call_args["signature"] is WebSummarySignature
-
