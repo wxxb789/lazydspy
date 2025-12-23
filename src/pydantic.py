@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
 
 @dataclass
@@ -16,7 +16,13 @@ class FieldInfo:
     description: Optional[str] = None
 
 
-def Field(default: Any, *, ge: float | None = None, le: float | None = None, description: str | None = None) -> FieldInfo:
+def Field(
+    default: Any,
+    *,
+    ge: float | None = None,
+    le: float | None = None,
+    description: str | None = None,
+) -> Any:
     """创建字段描述对象，用于约束范围。"""
 
     return FieldInfo(default=default, ge=ge, le=le, description=description)
@@ -47,7 +53,8 @@ class BaseModel:
 
     def __init__(self, **data: Any) -> None:
         errors: List[Dict[str, Any]] = []
-        for name, annotation in self.__annotations__.items():  # type: ignore[attr-defined]
+        annotations = getattr(self.__class__, "__annotations__", {})
+        for name, annotation in annotations.items():
             field_obj = getattr(self.__class__, name, None)
             required = isinstance(field_obj, FieldInfo) and field_obj.default is Ellipsis
             default = field_obj.default if isinstance(field_obj, FieldInfo) else field_obj
@@ -62,12 +69,20 @@ class BaseModel:
 
             if isinstance(field_obj, FieldInfo):
                 if field_obj.ge is not None and value is not None and value < field_obj.ge:
-                    errors.append({"loc": (name,), "msg": "Value must be >= ge", "ctx": {"ge": field_obj.ge}})
+                    errors.append(
+                        {"loc": (name,), "msg": "Value must be >= ge", "ctx": {"ge": field_obj.ge}}
+                    )
                 if field_obj.le is not None and value is not None and value > field_obj.le:
-                    errors.append({"loc": (name,), "msg": "Value must be <= le", "ctx": {"le": field_obj.le}})
+                    errors.append(
+                        {"loc": (name,), "msg": "Value must be <= le", "ctx": {"le": field_obj.le}}
+                    )
 
             # 嵌套模型支持：若类型是 BaseModel 子类且传入字典，则递归构造。
-            if isinstance(annotation, type) and issubclass(annotation, BaseModel) and isinstance(value, dict):
+            if (
+                isinstance(annotation, type)
+                and issubclass(annotation, BaseModel)
+                and isinstance(value, dict)
+            ):
                 value = annotation(**value)
 
             setattr(self, name, value)

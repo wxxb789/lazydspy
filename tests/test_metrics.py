@@ -2,7 +2,7 @@ import json
 import pathlib
 import sys
 import types
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
@@ -49,7 +49,9 @@ class _FakeOpenAI:
 def _patch_openai(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
     """统一替换 OpenAI 客户端，返回指定内容。"""
 
-    factory: Callable[[], _FakeOpenAI] = lambda: _FakeOpenAI(content)
+    def factory() -> _FakeOpenAI:
+        return _FakeOpenAI(content)
+
     monkeypatch.setattr(metrics, "OpenAI", factory)
 
 

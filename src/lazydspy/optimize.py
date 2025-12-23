@@ -6,9 +6,8 @@ import json
 from pathlib import Path
 from typing import List
 
-import dspy
-
 import core
+import dspy
 import metrics
 
 DATA_ROOT = Path(__file__).resolve().parent

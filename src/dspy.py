@@ -50,7 +50,7 @@ class _OptimizedProgram:
 
 
 @dataclass
-class Example(dict):
+class Example(dict[str, Any]):
     """示例容器，模仿 dspy.Example 的最小接口。"""
 
     # 将输入字段名缓存下来，便于与真实 dspy 行为对齐。
@@ -135,7 +135,8 @@ class GEvalPromptedAssembly:
         """返回携带伪最优提示的占位结果。"""
 
         tuned_prompt = (
-            f"{seed_prompt}\\n（占位 GEPA 生成，深度 {self.depth}，宽度 {self.breadth}，温度 {self.temperature}）"
+            f"{seed_prompt}\n"
+            f"（占位 GEPA 生成，深度 {self.depth}，宽度 {self.breadth}，温度 {self.temperature}）"
         )
         meta = {
             "breadth": self.breadth,
