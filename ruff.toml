@@ -1,0 +1,4 @@
+target-version = "py312"
+src = ["src"]
+select = ["E", "F", "I", "B"]
+line-length = 100
