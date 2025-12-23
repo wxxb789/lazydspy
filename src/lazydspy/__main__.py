@@ -1,9 +1,8 @@
 """Command-line entrypoint for lazydspy."""
 
+from __future__ import annotations
 
-def main() -> None:
-    """Run the primary CLI routine."""
-    print("Hello from lazydspy!")
+from lazydspy.optimize import main
 
 
 if __name__ == "__main__":

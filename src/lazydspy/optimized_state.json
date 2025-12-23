@@ -1,0 +1,11 @@
+{
+  "prompt": "你是一名擅长信息提炼的中文助手，阅读网页内容后生成简洁摘要，突出核心事实与结论，避免无关细节。\\n（占位 GEPA 生成，深度 3，宽度 5，温度 0.7）",
+  "meta": {
+    "breadth": 5,
+    "depth": 3,
+    "temperature": 0.7,
+    "train_size": 5,
+    "val_size": 5,
+    "prompt_model": "LM(model='gpt-4o', config={'temperature': 0.7})"
+  }
+}

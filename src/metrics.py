@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, TypedDict
 
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - 运行时环境可能缺少依赖
+    OpenAI = None  # type: ignore[assignment]
 
 from lazydspy.schemas import ScoreDetail
 
@@ -54,6 +57,9 @@ def llm_judge_metric(gold: str, pred: str, trace: Any | None = None) -> float:
     """
 
     try:
+        if OpenAI is None:
+            raise RuntimeError("openai 客户端不可用")
+
         # 构造 OpenAI 客户端并发送打分请求（trace 仅为兼容接口占位）。
         client = OpenAI()
         completion = client.chat.completions.create(  # type: ignore[assignment]
