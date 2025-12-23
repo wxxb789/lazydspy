@@ -10,3 +10,13 @@
 3. Copy `.env.example` to `.env` and provide your secrets (e.g., `OPENAI_API_KEY`).
 
 The codebase uses a `src/` layout, with linting configured through `ruff` and type checking through `mypy` in strict mode.
+
+## Checks
+
+Run the following commands from the repository root after setup (recommended order):
+
+1. `ruff check .`
+2. `mypy`
+3. `pytest`
+
+You can also execute them sequentially via `make check`.

@@ -1,7 +1,7 @@
 import pytest
-from pydantic import ValidationError
 
 from lazydspy.schemas import MetricResult, ScoreDetail
+from pydantic import ValidationError
 
 
 def test_score_detail_valid():

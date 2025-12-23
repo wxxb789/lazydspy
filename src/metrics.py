@@ -8,7 +8,7 @@ from typing import Any, Dict, List, TypedDict
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover - 运行时环境可能缺少依赖
-    OpenAI = None  # type: ignore[assignment]
+    OpenAI = None
 
 from lazydspy.schemas import ScoreDetail
 
@@ -36,7 +36,8 @@ JUDGE_PROMPT: str = (
     "你是严格的中文评审，请根据提供的参考答案与模型输出进行打分。"
     "必须返回 JSON 字符串，字段包括：\n"
     "- score: float，总分范围 0-5。\n"
-    "- details: object，包含 relevance、accuracy、completeness、clarity、formatting，均为 1-5 的整数。\n"
+    "- details: object，包含 relevance、accuracy、completeness、\n"
+    "  clarity、formatting，均为 1-5 的整数。\n"
     "- feedback: str，对模型输出的中文反馈。\n"
     "只返回符合上述结构的 JSON，不要添加多余文字。"
 )
@@ -61,8 +62,8 @@ def llm_judge_metric(gold: str, pred: str, trace: Any | None = None) -> float:
             raise RuntimeError("openai 客户端不可用")
 
         # 构造 OpenAI 客户端并发送打分请求（trace 仅为兼容接口占位）。
-        client = OpenAI()
-        completion = client.chat.completions.create(  # type: ignore[assignment]
+        client: Any = OpenAI()
+        completion = client.chat.completions.create(
             model="gpt-4.1",
             messages=[
                 {"role": "system", "content": JUDGE_PROMPT},
@@ -76,11 +77,7 @@ def llm_judge_metric(gold: str, pred: str, trace: Any | None = None) -> float:
         # 通过 TypedDict 限定最小访问属性，避免属性缺失导致的类型告警。
         raw: _Completion = {
             "choices": [
-                {
-                    "message": {
-                        "content": completion.choices[0].message.content  # type: ignore[index]
-                    }
-                }
+                {"message": {"content": completion.choices[0].message.content}}
             ]
         }
 

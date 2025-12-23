@@ -14,8 +14,8 @@ SEED_PROMPT: str = (
 class WebSummarySignature(dspy.Signature):
     """网页摘要的签名定义，限定输入输出字段。"""
 
-    content: str = dspy.InputField(desc="网页原始内容")
-    summary: str = dspy.OutputField(desc="基于链式思考生成的中文摘要")
+    content: dspy.InputField = dspy.InputField(desc="网页原始内容")
+    summary: dspy.OutputField = dspy.OutputField(desc="基于链式思考生成的中文摘要")
 
 
 class DeepSummarizer(dspy.Module):
