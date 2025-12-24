@@ -43,6 +43,7 @@ class GenerationConfig(BaseModel):
     checkpoint_interval: int = Field(default=2, description="Checkpoint 间隔（步数）")
     max_checkpoints: int = Field(default=3, description="最多保留多少个 checkpoint")
     resume: bool = Field(default=False, description="是否尝试从 checkpoint 恢复")
+    generate_sample_data: bool = Field(default=False, description="是否生成 sample-data/train.jsonl 模板")
 
     @field_validator("algorithm")
     @classmethod
@@ -241,7 +242,11 @@ QUESTIONS: List[Question] = [
     Question("algorithm", "选择优化算法（GEPA 或 MIPROv2），并说明原因。"),
     Question("hyperparameters", "提供关键超参，格式 key=value, key2=value2，例如 depth=3, lr=0.1。"),
     Question("data_path", "训练/验证数据路径，支持相对路径或绝对路径。"),
-    Question("mode", "偏好 quick 还是 full? 回答 quick 或 full。", post_process=lambda x: x.strip().lower()),
+    Question(
+        "mode",
+        "偏好 quick 还是 full? 回答 quick 或 full。",
+        post_process=lambda x: x.strip().lower(),
+    ),
     Question(
         "subset_size",
         "quick 模式下希望采样多少条数据进行验证？输入正整数或留空。",
@@ -266,6 +271,11 @@ QUESTIONS: List[Question] = [
     Question(
         "resume",
         "需要在运行时默认启用 --resume 吗？回答 yes/no。",
+        post_process=lambda x: x.strip().lower() in {"y", "yes", "true", "1"},
+    ),
+    Question(
+        "generate_sample_data",
+        "需要生成 sample-data/train.jsonl 模板吗？回答 yes/no。",
         post_process=lambda x: x.strip().lower() in {"y", "yes", "true", "1"},
     ),
 ]
@@ -298,16 +308,29 @@ def _summarize_config(config: GenerationConfig) -> None:
     table.add_row("Checkpoint 数量上限", str(config.max_checkpoints))
     table.add_row("需要 checkpoint", "Yes" if config.checkpoint_needed else "No")
     table.add_row("默认 resume", "Yes" if config.resume else "No")
+    table.add_row("生成样例数据", "Yes" if config.generate_sample_data else "No")
     console.print(table)
 
 
-def _render_files(config: GenerationConfig) -> Path:
+@dataclass
+class RenderResult:
+    script_path: Path
+    metadata_path: Path
+    readme_path: Path
+    data_guide_path: Path
+    data_guide_highlights: List[str]
+    sample_data_path: Path | None
+
+
+def _render_files(config: GenerationConfig) -> RenderResult:
     base_dir = Path("generated") / config.session_id
     base_dir.mkdir(parents=True, exist_ok=True)
 
     script_path = base_dir / "pipeline.py"
     metadata_path = base_dir / "metadata.json"
     readme_path = base_dir / "README.md"
+    data_guide_path = base_dir / "DATA_GUIDE.md"
+    sample_data_path: Path | None = None
 
     metadata: Dict[str, Any] = {
         "python": ">=3.12",
@@ -411,7 +434,11 @@ def _render_files(config: GenerationConfig) -> Path:
                     cls = getattr(dspy, "MIPROv2", None)
                 if cls is None:
                     raise RuntimeError(f"DSPy 未提供 {algorithm}")
-                return cls(metric=None, prompt_model=dspy.OpenAI(model="gpt-4o"), **hyperparameters)
+                return cls(
+                    metric=None,
+                    prompt_model=dspy.OpenAI(model="gpt-4o"),
+                    **hyperparameters,
+                )
 
 
             def _chunk_dataset(examples: List[dspy.Example], size: int) -> List[List[dspy.Example]]:
@@ -420,7 +447,9 @@ def _render_files(config: GenerationConfig) -> Path:
                 return [examples[idx : idx + size] for idx in range(0, len(examples), size)]
 
 
-            def _save_checkpoint(program: Any, checkpoint_dir: Path, step: int, max_keep: int) -> Path:
+            def _save_checkpoint(
+                program: Any, checkpoint_dir: Path, step: int, max_keep: int
+            ) -> Path:
                 checkpoint_dir.mkdir(parents=True, exist_ok=True)
                 payload = {
                     "step": step,
@@ -503,12 +532,16 @@ def _render_files(config: GenerationConfig) -> Path:
                 if not train_examples:
                     raise RuntimeError("缺少训练数据")
 
-                effective_subset = subset_size if mode == "quick" and subset_size else len(train_examples)
+                effective_subset = (
+                    subset_size if mode == "quick" and subset_size else len(train_examples)
+                )
                 if mode == "quick" and effective_subset and effective_subset < len(train_examples):
                     train_examples = train_examples[:effective_subset]
                     dev_examples = dev_examples[: max(1, min(len(dev_examples), effective_subset))]
 
-                optimizer = _build_optimizer(runtime["algorithm"], runtime.get("hyperparameters", {}))
+                optimizer = _build_optimizer(
+                    runtime["algorithm"], runtime.get("hyperparameters", {})
+                )
 
                 resume_state = _load_latest_checkpoint(checkpoint_dir) if resume else None
                 seed_prompt = _resolve_prompt(runtime, resume_state)
@@ -522,7 +555,9 @@ def _render_files(config: GenerationConfig) -> Path:
 
                 program = None
                 for offset, batch in enumerate(batches, start=start_step):
-                    program = optimizer.compile(trainset=batch, valset=dev_examples, seed_prompt=seed_prompt)
+                    program = optimizer.compile(
+                        trainset=batch, valset=dev_examples, seed_prompt=seed_prompt
+                    )
                     if offset % checkpoint_interval == 0:
                         saved = _save_checkpoint(program, checkpoint_dir, offset, max_checkpoints)
                         console.print(f"[green]已保存 checkpoint: {saved}[/]")
@@ -559,7 +594,10 @@ def _render_files(config: GenerationConfig) -> Path:
     )
 
     script_path.write_text(script, encoding="utf-8")
-    metadata_path.write_text(json.dumps(generation_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    metadata_path.write_text(
+        json.dumps(generation_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     readme_content = textwrap.dedent(
         f"""\
@@ -583,7 +621,68 @@ def _render_files(config: GenerationConfig) -> Path:
     )
     readme_path.write_text(readme_content, encoding="utf-8")
 
-    return script_path
+    io_fields = config.input_fields + config.output_fields
+    io_section = "\n".join(f"- `{field}`: 请提供清洗后的字符串" for field in io_fields)
+    if not io_section:
+        io_section = "- 自由格式 payload"
+    expectations = [
+        f"场景：{config.scenario}",
+        f"输入字段：{', '.join(config.input_fields)}" if config.input_fields else "输入字段：<未指定>",
+        f"输出字段：{', '.join(config.output_fields)}" if config.output_fields else "输出字段：<未指定>",
+        f"数据路径：{config.data_path or '<未指定>'}",
+    ]
+    data_guide_lines = [
+        "# 数据准备指引",
+        "",
+        f"- 目标场景：{config.scenario}",
+        "- 建议：先用少量样例验证格式，再逐步扩充数据量，避免一次性投入高成本。",
+        "- 格式：UTF-8 编码的 JSONL，每行一个独立样本。",
+        "- 字段要求：",
+        io_section,
+        "",
+        "## 最小可用样例",
+        "```json",
+    ]
+    sample_row = {field: f"<填写{field}>" for field in io_fields}
+    if not sample_row:
+        sample_row = {"payload": "<<your content>>"}
+    data_guide_lines.append(json.dumps(sample_row, ensure_ascii=False))
+    data_guide_lines.append("```")
+    data_guide_lines.append("")
+    data_guide_lines.append("## 质量检查清单")
+    data_guide_lines.extend(
+        [
+            "- 检查空值/缺字段并补全或剔除。",
+            "- 确认每行 JSON 可独立解析，避免尾随逗号。",
+            "- 若含标注字段（如 answer/label），确保无冲突或歧义。",
+        ]
+    )
+    data_guide_path.write_text("\n".join(data_guide_lines), encoding="utf-8")
+
+    if config.generate_sample_data:
+        sample_dir = Path("sample-data")
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        sample_data_path = sample_dir / "train.jsonl"
+        example_rows = [
+            {field: f"示例 {idx} 的 {field}" for field in io_fields} for idx in range(1, 3)
+        ]
+        if not example_rows or not example_rows[0]:
+            example_rows = [{"payload": f"示例 {idx}"} for idx in range(1, 3)]
+        sample_data_path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in example_rows),
+            encoding="utf-8",
+        )
+
+    data_guide_highlights = expectations + ["数据指引路径：" + str(data_guide_path)]
+
+    return RenderResult(
+        script_path=script_path,
+        metadata_path=metadata_path,
+        readme_path=readme_path,
+        data_guide_path=data_guide_path,
+        data_guide_highlights=data_guide_highlights,
+        sample_data_path=sample_data_path,
+    )
 
 
 def _run_command(command: Sequence[str]) -> bool:
@@ -636,10 +735,19 @@ def run_chat() -> None:
         console.print("[yellow]已取消生成。[/]")
         return
 
-    script_path = _render_files(config)
-    console.print(f"[green]已生成脚本：{script_path}[/]")
-    console.print(f"[green]示例运行命令：uv run {script_path}[/]")
-    _run_quality_checks(script_path)
+    render_result = _render_files(config)
+    console.print(f"[green]已生成脚本：{render_result.script_path}[/]")
+    console.print(f"[green]示例运行命令：uv run {render_result.script_path}[/]")
+
+    guide_table = Table(title="数据指引要点", expand=False, show_header=False)
+    for line in render_result.data_guide_highlights:
+        guide_table.add_row(line)
+    console.print(guide_table)
+
+    if render_result.sample_data_path:
+        console.print(f"[cyan]已生成样例数据：{render_result.sample_data_path}[/]")
+
+    _run_quality_checks(render_result.script_path)
     if config.checkpoint_needed:
         console.print("[blue]请在运行时确保 checkpoint 路径可用。[/]")
 
