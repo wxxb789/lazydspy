@@ -149,12 +149,40 @@ class GEvalPromptedAssembly:
         return _OptimizedProgram(prompt=tuned_prompt, meta=meta)
 
 
+class MIPROv2:
+    """MIPROv2 占位实现，接口对齐 GEPA。"""
+
+    def __init__(self, metric: Any, prompt_model: LM, **hyperparameters: Any) -> None:
+        self.metric = metric
+        self.prompt_model = prompt_model
+        self.hyperparameters = hyperparameters
+
+    def compile(
+        self,
+        trainset: list[Example],
+        valset: list[Example],
+        seed_prompt: str,
+    ) -> _OptimizedProgram:
+        tuned_prompt = (
+            f"{seed_prompt}\n"
+            f"（占位 MIPROv2 生成，训练样本 {len(trainset)}，验证样本 {len(valset)}）"
+        )
+        meta = {
+            "train_size": len(trainset),
+            "val_size": len(valset),
+            "prompt_model": repr(self.prompt_model),
+            "hyperparameters": self.hyperparameters,
+        }
+        return _OptimizedProgram(prompt=tuned_prompt, meta=meta)
+
+
 __all__ = [
     "ChainOfThought",
     "Example",
     "GEvalPromptedAssembly",
     "InputField",
     "LM",
+    "MIPROv2",
     "Module",
     "OpenAI",
     "OutputField",
