@@ -9,7 +9,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
-from lazydspy import cli  # noqa: E402
+from lazydspy import GEPA_PRESETS, MIPROV2_PRESETS, cli  # noqa: E402
 
 
 def test_agent_session_fallback_when_client_init_fails(monkeypatch: pytest.MonkeyPatch):
@@ -78,13 +78,31 @@ def _build_config(**kwargs):
         subset_size=None,
         checkpoint_needed=False,
         checkpoint_dir=pathlib.Path("checkpoints"),
-        checkpoint_interval=2,
-        max_checkpoints=3,
+        checkpoint_interval=1,
+        max_checkpoints=20,
         resume=False,
         generate_sample_data=False,
     )
     defaults.update(kwargs)
     return cli.GenerationConfig(**defaults)
+
+
+def test_generation_config_uses_mode_presets() -> None:
+    """quick/full 模式应自动填充算法预设的超参。"""
+
+    config = _build_config(algorithm="GEPA", mode="quick", hyperparameters={})
+
+    assert config.active_hyperparameters["breadth"] == GEPA_PRESETS["quick"]["breadth"]
+    assert config.active_hyperparameters["temperature"] == GEPA_PRESETS["quick"]["temperature"]
+
+
+def test_generation_config_overrides_are_typed() -> None:
+    """应接受字典覆盖并落在对应算法字段上。"""
+
+    config = _build_config(algorithm="MIPROv2", mode="full", hyperparameters={"search_size": 5})
+
+    assert config.hyperparameters.search_size == 5
+    assert config.active_hyperparameters["temperature"] == MIPROV2_PRESETS["full"]["temperature"]
 
 
 def test_render_files_builds_data_guide(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
