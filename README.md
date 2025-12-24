@@ -32,6 +32,12 @@ The outer CLI is now powered by [Typer](https://typer.tiangolo.com/) with Rich o
   uv run lazydspy optimize
   ```
 
+- Generated `pipeline.py` scripts embed dependencies via [PEP 723](https://peps.python.org/pep-0723/) blocks, so you can run them directly with uv, e.g.:
+
+  ```bash
+  uv run pipeline.py --mode quick
+  ```
+
 ## Checks
 
 Run the following commands from the repository root after setup (recommended order):
