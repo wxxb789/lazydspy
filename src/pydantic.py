@@ -18,21 +18,29 @@ class FieldInfo:
     """字段元信息，记录默认值与范围约束。"""
 
     default: Any
+    default_factory: Optional[Any] = None
     ge: Optional[float] = None
     le: Optional[float] = None
     description: Optional[str] = None
 
 
 def Field(
-    default: Any,
+    default: Any = Ellipsis,
     *,
+    default_factory: Optional[Any] = None,
     ge: float | None = None,
     le: float | None = None,
     description: str | None = None,
 ) -> Any:
     """创建字段描述对象，用于约束范围。"""
 
-    return FieldInfo(default=default, ge=ge, le=le, description=description)
+    return FieldInfo(
+        default=default,
+        default_factory=default_factory,
+        ge=ge,
+        le=le,
+        description=description,
+    )
 
 
 class ValidationError(Exception):
@@ -63,8 +71,18 @@ class BaseModel:
         annotations = getattr(self.__class__, "__annotations__", {})
         for name, annotation in annotations.items():
             field_obj = getattr(self.__class__, name, None)
-            required = isinstance(field_obj, FieldInfo) and field_obj.default is Ellipsis
-            default = field_obj.default if isinstance(field_obj, FieldInfo) else field_obj
+            required = (
+                isinstance(field_obj, FieldInfo)
+                and field_obj.default is Ellipsis
+                and field_obj.default_factory is None
+            )
+            if isinstance(field_obj, FieldInfo):
+                if field_obj.default_factory is not None:
+                    default = field_obj.default_factory()
+                else:
+                    default = field_obj.default
+            else:
+                default = field_obj
 
             if name in data:
                 value = data[name]
