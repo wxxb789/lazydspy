@@ -1,3 +1,4 @@
+import json
 import pathlib
 import sys
 import types
@@ -66,3 +67,65 @@ def test_agent_session_summarize_fallback(monkeypatch: pytest.MonkeyPatch):
 
     assert "mode: quick" in summary
     assert "algorithm: gepa" in summary
+
+
+def _build_config(**kwargs):
+    defaults = dict(
+        session_id="session-1",
+        scenario="示例场景",
+        input_fields=["query"],
+        output_fields=["answer"],
+        model_preference="claude",
+        algorithm="GEPA",
+        hyperparameters={},
+        data_path=None,
+        mode="quick",
+        subset_size=None,
+        checkpoint_needed=False,
+        checkpoint_dir=pathlib.Path("checkpoints"),
+        checkpoint_interval=2,
+        max_checkpoints=3,
+        resume=False,
+        generate_sample_data=False,
+    )
+    defaults.update(kwargs)
+    return cli.GenerationConfig(**defaults)
+
+
+def test_render_files_builds_data_guide(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    """应写入数据指引并在结果中返回路径。"""
+
+    monkeypatch.chdir(tmp_path)
+    config = _build_config(
+        scenario="问答任务",
+        input_fields=["query", "context"],
+        output_fields=["answer"],
+    )
+
+    result = cli._render_files(config)
+
+    assert result.data_guide_path.exists()
+    content = result.data_guide_path.read_text(encoding="utf-8")
+    assert "问答任务" in content
+    assert "`query`" in content
+    assert "`answer`" in content
+    assert result.sample_data_path is None
+
+
+def test_render_files_creates_sample_data_when_enabled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """开启 generate_sample_data 时应输出样例 JSONL。"""
+
+    monkeypatch.chdir(tmp_path)
+    config = _build_config(generate_sample_data=True, input_fields=[], output_fields=["label"])
+
+    result = cli._render_files(config)
+
+    assert result.sample_data_path is not None
+    assert result.sample_data_path.exists()
+    rows = [
+        json.loads(line)
+        for line in result.sample_data_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows and rows[0].get("label")
