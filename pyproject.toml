@@ -6,9 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "dspy",
+    "anthropic",
     "openai",
-    "pydantic",
+    "pydantic>=2",
     "python-dotenv",
+    "rich",
 ]
 
 [project.scripts]
