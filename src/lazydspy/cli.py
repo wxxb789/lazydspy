@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from string import Template
-from typing import Any, Callable, Dict, Iterable, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 from uuid import uuid4
 
 from anthropic import Anthropic
@@ -144,12 +145,20 @@ class Question:
     post_process: Callable[[str], Any] | None = None
 
 
-class ClaudeSession:
-    """Lightweight wrapper to ask Claude for concise questions."""
+DEFAULT_SYSTEM_PROMPT = (
+    "你是成本敏感的 CLI 助手，遵循“先简单后复杂”的原则："
+    "先以最短的问题获取关键信息，再逐步补充细节，并提示用户关注推理成本。"
+)
 
-    def __init__(self, console: Console) -> None:
+
+class AgentSession:
+    """Lightweight wrapper to orchestrate asking, confirming, and summarizing."""
+
+    def __init__(self, console: Console, system_prompt: str | None = None) -> None:
+        self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self._console = console
         self._client: Anthropic | None = None
+        self._model = "claude-3-5-sonnet-20241022"
 
     def _ensure_client(self) -> Anthropic | None:
         if self._client is not None:
@@ -161,31 +170,67 @@ class ClaudeSession:
             self._client = None
         return self._client
 
-    def ask(self, hint: str) -> str:
+    def _call_model(self, user_content: str, fallback: str) -> str:
         client = self._ensure_client()
         if client is None:
-            return hint
+            return fallback
 
         try:
             response = client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model=self._model,
                 max_tokens=256,
                 temperature=0.2,
-                system=(
-                    "你是 CLI 助手，请用一句简洁的中文问题向用户询问需要的配置字段，"
-                    "保持礼貌且避免额外解释。"
-                ),
-                messages=[{"role": "user", "content": hint}],
+                system=self.system_prompt,
+                messages=[{"role": "user", "content": user_content}],
             )
             content = response.content
             if not content:
-                return hint
+                return fallback
             first_block = content[0]
             text = getattr(first_block, "text", "")
-            return text.strip() or hint
+            return text.strip() or fallback
         except Exception as exc:  # noqa: BLE001
             self._console.print(f"[yellow]调用 Claude 失败，使用内置提示：{exc}[/]")
-            return hint
+            return fallback
+
+    def ask(self, hint: str) -> str:
+        """Generate a concise question for the given hint."""
+        prompt = textwrap.dedent(
+            f"""\
+            请根据下面的提示，生成一句简短的中文提问，引导用户回答对应字段。
+            先简单后复杂，避免冗长，并提醒用户注意成本。
+
+            提示：{hint}
+            """
+        )
+        return self._call_model(prompt, fallback=hint)
+
+    def confirm(self, summary: str) -> str:
+        """Generate a confirmation message based on the current summary."""
+        prompt = textwrap.dedent(
+            f"""\
+            根据以下配置摘要，生成一句简明的确认语句，提示用户输入 y/n 继续。
+            保持礼貌，并提醒仅在必要时进行高成本操作。
+
+            摘要：
+            {summary}
+            """
+        )
+        return self._call_model(prompt, fallback="确认上述配置并生成脚本吗？(y/N)")
+
+    def summarize(self, answers: Mapping[str, Any]) -> str:
+        """Summarize collected answers to help the user confirm quickly."""
+        prompt = textwrap.dedent(
+            f"""\
+            用尽量短的中文总结以下配置要点，列出 3-5 个关键项，遵循先简单后复杂。
+            避免过长描述，提示用户关注成本。
+
+            配置：{json.dumps(dict(answers), ensure_ascii=False)}
+            """
+        )
+        fallback_lines = [f"{key}: {value or '<空>'}" for key, value in answers.items()]
+        fallback = "；".join(fallback_lines)
+        return self._call_model(prompt, fallback=fallback)
 
 
 QUESTIONS: List[Question] = [
@@ -226,9 +271,9 @@ QUESTIONS: List[Question] = [
 ]
 
 
-def _ask_user(session: ClaudeSession, question: Question) -> Any:
+def _ask_user(session: AgentSession, question: Question) -> Any:
     prompt = session.ask(question.hint)
-    console.print(Panel(prompt, title="Claude 提问", expand=False))
+    console.print(Panel(prompt, title="Agent 提问", expand=False))
     answer = input("> ").strip()
     return question.post_process(answer) if question.post_process else answer
 
@@ -565,8 +610,8 @@ def _run_quality_checks(script_path: Path) -> None:
 
 
 def run_chat() -> None:
-    console.print("[bold]开始 Claude 多轮问答，收集 GenerationConfig[/]")
-    session = ClaudeSession(console)
+    console.print("[bold]开始多轮问答，收集 GenerationConfig[/]")
+    session = _build_agent_session()
     answers: Dict[str, Any] = {}
     for question in QUESTIONS:
         answers[question.key] = _ask_user(session, question)
@@ -582,7 +627,11 @@ def run_chat() -> None:
         return
 
     _summarize_config(config)
-    confirm = input("确认生成脚本和附属文件? [y/N]: ").strip().lower()
+    summary = session.summarize(answers)
+    console.print(Panel(summary, title="AI 总结", expand=False))
+    confirm_prompt = session.confirm(summary)
+    console.print(Panel(confirm_prompt, title="确认", expand=False))
+    confirm = input("> ").strip().lower()
     if confirm not in {"y", "yes"}:
         console.print("[yellow]已取消生成。[/]")
         return
@@ -620,4 +669,9 @@ def main(argv: Iterable[str] | None = None) -> None:
     args.func(args)
 
 
-__all__ = ["GenerationConfig", "main", "run_chat", "run_optimize"]
+def _build_agent_session() -> AgentSession:
+    system_prompt = os.getenv("LAZYDSPY_SYSTEM_PROMPT") or DEFAULT_SYSTEM_PROMPT
+    return AgentSession(console, system_prompt=system_prompt)
+
+
+__all__ = ["AgentSession", "GenerationConfig", "main", "run_chat", "run_optimize"]
