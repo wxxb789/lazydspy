@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 
 class ConfigDict(dict[str, Any]):
@@ -122,10 +122,13 @@ class BaseModel:
         return cls(**data)
 
 
-def field_validator(*_fields: str, **_kwargs: Any):
+FuncT = TypeVar("FuncT", bound=Callable[..., Any])
+
+
+def field_validator(*_fields: str, **_kwargs: Any) -> Callable[[FuncT], FuncT]:
     """占位 field_validator，直接返回原函数。"""
 
-    def decorator(func: Any) -> Any:
+    def decorator(func: FuncT) -> FuncT:
         return func
 
     return decorator

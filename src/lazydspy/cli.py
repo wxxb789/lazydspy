@@ -10,14 +10,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from string import Template
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 console = Console()
 
@@ -42,7 +43,9 @@ class GenerationConfig(BaseModel):
     checkpoint_interval: int = Field(default=2, description="Checkpoint 间隔（步数）")
     max_checkpoints: int = Field(default=3, description="最多保留多少个 checkpoint")
     resume: bool = Field(default=False, description="是否尝试从 checkpoint 恢复")
-    generate_sample_data: bool = Field(default=False, description="是否生成 sample-data/train.jsonl 模板")
+    generate_sample_data: bool = Field(
+        default=False, description="是否生成 sample-data/train.jsonl 示例"
+    )
 
     @field_validator("algorithm")
     @classmethod
@@ -187,9 +190,9 @@ class AgentSession:
             )
 
         for candidate in ("complete", "send", "chat", "run"):
-            handler = getattr(session, candidate, None)
-            if handler:
-                return handler(user_content)  # type: ignore[misc]
+            handler = cast(Callable[[str], Any] | None, getattr(session, candidate, None))
+            if callable(handler):
+                return handler(user_content)
 
         raise RuntimeError("Claude Agent SDK session 不支持的接口")
 
@@ -206,25 +209,33 @@ class AgentSession:
                 return content.strip()
             if isinstance(content, Sequence):
                 for block in content:
-                    text = getattr(block, "text", None) or (
-                        block.get("text") if isinstance(block, Mapping) else None
-                    )  # type: ignore[arg-type]
+                    text: str | None
+                    if isinstance(block, Mapping):
+                        text = block.get("text") if isinstance(block.get("text"), str) else None
+                    else:
+                        candidate_text = getattr(block, "text", None)
+                        text = candidate_text if isinstance(candidate_text, str) else None
                     if text:
-                        return str(text).strip()
+                        return text.strip()
 
         if hasattr(response, "text"):
-            return str(getattr(response, "text")).strip()
+            return str(response.text).strip()
 
         content = getattr(response, "content", None)
         if isinstance(content, str):
             return content.strip()
         if isinstance(content, Sequence):
             for block in content:
-                text = getattr(block, "text", None) or (
-                    block.get("text") if isinstance(block, Mapping) else None
-                )  # type: ignore[arg-type]
-                if text:
-                    return str(text).strip()
+                content_text: str | None
+                if isinstance(block, Mapping):
+                    content_text = (
+                        block.get("text") if isinstance(block.get("text"), str) else None
+                    )
+                else:
+                    candidate_text = getattr(block, "text", None)
+                    content_text = candidate_text if isinstance(candidate_text, str) else None
+                if content_text:
+                    return content_text.strip()
 
         return ""
 
@@ -287,7 +298,10 @@ QUESTIONS: List[Question] = [
     Question("output_fields", "列出输出字段名称（逗号分隔），如 answer, score。"),
     Question("model_preference", "偏好的模型名称或容量上限，例如 claude-3-5-sonnet。"),
     Question("algorithm", "选择优化算法（GEPA 或 MIPROv2），并说明原因。"),
-    Question("hyperparameters", "提供关键超参，格式 key=value, key2=value2，例如 depth=3, lr=0.1。"),
+    Question(
+        "hyperparameters",
+        "提供关键超参，格式 key=value, key2=value2，例如 depth=3, lr=0.1。",
+    ),
     Question("data_path", "训练/验证数据路径，支持相对路径或绝对路径。"),
     Question(
         "mode",
@@ -389,23 +403,28 @@ def _render_files(config: GenerationConfig) -> RenderResult:
     data_guide_path = base_dir / "DATA_GUIDE.md"
     sample_data_path: Path | None = None
 
+    script_dependencies = [
+        "dspy",
+        "pydantic>=2",
+        "typer",
+        "rich",
+        "openai",
+        "claude-agent-sdk==0.1.17",
+        "anthropic",
+    ]
+    python_requirement = ">=3.12"
+
     metadata: Dict[str, Any] = {
-        "python": ">=3.12",
-        "dependencies": [
-            "dspy",
-            "pydantic>=2",
-            "typer",
-            "rich",
-            "openai",
-            "claude-agent-sdk==0.1.17",
-        ],
+        "python": python_requirement,
+        "dependencies": script_dependencies,
         "scenario": config.scenario,
         "generated_at": datetime.utcnow().isoformat(),
         "generator": "lazydspy CLI",
     }
 
-    if hasattr(config, "model_dump"):
-        generation_payload = config.model_dump(mode="json")  # type: ignore[call-arg]
+    model_dump = getattr(config, "model_dump", None)
+    if callable(model_dump):
+        generation_payload = cast(Dict[str, Any], model_dump(mode="json"))
     else:  # pragma: no cover - compatibility for pydantic v1 in test stubs
         generation_payload = dict(getattr(config, "__dict__", {}))
     generation_payload = _make_jsonable(generation_payload)
@@ -428,6 +447,12 @@ def _render_files(config: GenerationConfig) -> RenderResult:
     script_template = Template(
         textwrap.dedent(
             """\
+            # /// script
+            # requires-python = "$python_requirement"
+            # dependencies = [
+            $dependencies_block
+            # ]
+            # ///
             #!/usr/bin/env python
             \"\"\"Auto-generated DSPy pipeline for $scenario.\"\"\"
 
@@ -552,16 +577,24 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                     "$mode_default", "--mode", "-m", help="运行模式：quick 或 full。"
                 ),
                 config: Path = typer.Option(
-                    Path("metadata.json"), "--config", help="自定义配置路径，默认读取生成的 metadata.json。"
+                    Path("metadata.json"),
+                    "--config",
+                    help="自定义配置路径，默认读取生成的 metadata.json。",
                 ),
                 checkpoint_dir: Path = typer.Option(
                     Path("$checkpoint_dir"), "--checkpoint-dir", help="Checkpoint 保存目录。"
                 ),
                 checkpoint_interval: int = typer.Option(
-                    $checkpoint_interval, "--checkpoint-interval", min=1, help="每多少步写一次 checkpoint。"
+                    $checkpoint_interval,
+                    "--checkpoint-interval",
+                    min=1,
+                    help="每多少步写一次 checkpoint。",
                 ),
                 max_checkpoints: int = typer.Option(
-                    $max_checkpoints, "--max-checkpoints", min=1, help="最多保留的 checkpoint 数量。"
+                    $max_checkpoints,
+                    "--max-checkpoints",
+                    min=1,
+                    help="最多保留的 checkpoint 数量。",
                 ),
                 resume: bool = typer.Option(
                     $resume_default,
@@ -642,6 +675,8 @@ def _render_files(config: GenerationConfig) -> RenderResult:
 
     script = script_template.substitute(
         scenario=config.scenario,
+        python_requirement=python_requirement,
+        dependencies_block="\n".join(f"#     \"{dep}\"," for dep in script_dependencies),
         metadata_json=json.dumps(metadata, ensure_ascii=False, indent=2),
         generation_json=json.dumps(generation_payload, ensure_ascii=False, indent=2),
         data_model_fields=data_model_fields,
@@ -672,7 +707,7 @@ def _render_files(config: GenerationConfig) -> RenderResult:
         - 需要 checkpoint: {"是" if config.checkpoint_needed else "否"}
         - Checkpoint 间隔: {config.checkpoint_interval}, 上限: {config.max_checkpoints}
 
-        运行示例：
+        运行示例（依赖由嵌入的 PEP 723 块声明）：
 
         ```bash
         uv run {script_path} --mode {config.mode} --checkpoint-dir {config.checkpoint_dir}
@@ -687,8 +722,16 @@ def _render_files(config: GenerationConfig) -> RenderResult:
         io_section = "- 自由格式 payload"
     expectations = [
         f"场景：{config.scenario}",
-        f"输入字段：{', '.join(config.input_fields)}" if config.input_fields else "输入字段：<未指定>",
-        f"输出字段：{', '.join(config.output_fields)}" if config.output_fields else "输出字段：<未指定>",
+        (
+            f"输入字段：{', '.join(config.input_fields)}"
+            if config.input_fields
+            else "输入字段：<未指定>"
+        ),
+        (
+            f"输出字段：{', '.join(config.output_fields)}"
+            if config.output_fields
+            else "输出字段：<未指定>"
+        ),
         f"数据路径：{config.data_path or '<未指定>'}",
     ]
     data_guide_lines = [
@@ -797,7 +840,9 @@ def run_chat() -> None:
 
     render_result = _render_files(config)
     console.print(f"[green]已生成脚本：{render_result.script_path}[/]")
-    console.print(f"[green]示例运行命令：uv run {render_result.script_path}[/]")
+    console.print(
+        f"[green]示例运行命令（PEP 723 嵌入式依赖）：uv run {render_result.script_path}[/]"
+    )
 
     guide_table = Table(title="数据指引要点", expand=False, show_header=False)
     for line in render_result.data_guide_highlights:
@@ -838,12 +883,12 @@ app = typer.Typer(
 )
 
 
-@app.command(help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
+@app.command(help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")  # type: ignore[misc]
 def chat() -> None:
     run_chat()
 
 
-@app.command(help="运行 GEPA 优化示例。")
+@app.command(help="运行 GEPA 优化示例。")  # type: ignore[misc]
 def optimize() -> None:
     run_optimize()
 
