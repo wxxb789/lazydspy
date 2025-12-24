@@ -857,12 +857,6 @@ def run_chat() -> None:
         console.print("[blue]请在运行时确保 checkpoint 路径可用。[/]")
 
 
-def run_optimize() -> None:
-    from lazydspy import optimize
-
-    optimize.main()
-
-
 def main(argv: Iterable[str] | None = None) -> None:
     args = list(argv) if argv is not None else None
     try:
@@ -879,7 +873,10 @@ def _build_agent_session() -> AgentSession:
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Rich/ Typer 驱动的 lazydspy CLI，包含 chat 与 optimize 子命令。",
+    help=(
+        "Rich/ Typer 驱动的 lazydspy CLI，通过 chat 子命令生成脚本，"
+        "并使用生成的脚本执行优化。"
+    ),
 )
 
 
@@ -888,9 +885,4 @@ def chat() -> None:
     run_chat()
 
 
-@app.command(help="运行 GEPA 优化示例。")  # type: ignore[misc]
-def optimize() -> None:
-    run_optimize()
-
-
-__all__ = ["AgentSession", "GenerationConfig", "app", "main", "run_chat", "run_optimize"]
+__all__ = ["AgentSession", "GenerationConfig", "app", "main", "run_chat"]
