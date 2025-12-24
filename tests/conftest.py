@@ -41,13 +41,55 @@ def _install_rich_stub() -> None:
     sys.modules.setdefault("rich.table", rich_table)
 
 
-def _install_anthropic_stub() -> None:
-    """Register an Anthropic stub to avoid network-dependent imports."""
+def _install_claude_agent_sdk_stub() -> None:
+    """Register a claude-agent-sdk stub to avoid network-dependent imports."""
 
-    anthropic = types.ModuleType("anthropic")
-    anthropic.Anthropic = object  # type: ignore[assignment]
-    sys.modules.setdefault("anthropic", anthropic)
+    class _Session:
+        def __init__(self, *args, **kwargs):
+            self.messages = types.SimpleNamespace(create=lambda **_kwargs: None)
+
+    claude_agent_sdk = types.ModuleType("claude_agent_sdk")
+    claude_agent_sdk.Session = _Session  # type: ignore[attr-defined]
+    sys.modules.setdefault("claude_agent_sdk", claude_agent_sdk)
+
+
+def _install_typer_stub() -> None:
+    """Register a Typer stub when the real package is unavailable."""
+
+    try:
+        import typer as _real_typer  # noqa: F401
+    except Exception:
+        typer = types.ModuleType("typer")
+
+        class _Exit(Exception):
+            def __init__(self, code: int = 0):
+                super().__init__()
+                self.exit_code = code
+
+        class _Typer:
+            def __init__(self, *args, **kwargs):
+                self._commands = {}
+
+            def command(self, *args, **kwargs):
+                def decorator(func):
+                    name = kwargs.get("name") or getattr(func, "__name__", "command")
+                    self._commands[name] = func
+                    return func
+
+                return decorator
+
+            def __call__(self, *args, **kwargs):
+                return None
+
+        def _option(default=None, *args, **kwargs):
+            return default
+
+        typer.Typer = _Typer  # type: ignore[attr-defined]
+        typer.Exit = _Exit  # type: ignore[attr-defined]
+        typer.Option = _option  # type: ignore[attr-defined]
+        sys.modules.setdefault("typer", typer)
 
 
 _install_rich_stub()
-_install_anthropic_stub()
+_install_claude_agent_sdk_stub()
+_install_typer_stub()

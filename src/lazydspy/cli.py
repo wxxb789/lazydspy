@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import subprocess
@@ -14,8 +13,8 @@ from string import Template
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 from uuid import uuid4
 
-from anthropic import Anthropic
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -158,38 +157,86 @@ class AgentSession:
     def __init__(self, console: Console, system_prompt: str | None = None) -> None:
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self._console = console
-        self._client: Anthropic | None = None
+        self._session: Any | None = None
         self._model = "claude-3-5-sonnet-20241022"
 
-    def _ensure_client(self) -> Anthropic | None:
-        if self._client is not None:
-            return self._client
+    def _build_sdk_session(self) -> Any:
+        from claude_agent_sdk import Session
+
+        return Session(system_prompt=self.system_prompt, model=self._model)
+
+    def _ensure_session(self) -> Any | None:
+        if self._session is not None:
+            return self._session
         try:
-            self._client = Anthropic()
+            self._session = self._build_sdk_session()
         except Exception as exc:  # noqa: BLE001
             self._console.print(f"[yellow]无法初始化 Claude 客户端，将使用内置提示：{exc}[/]")
-            self._client = None
-        return self._client
+            self._session = None
+        return self._session
 
-    def _call_model(self, user_content: str, fallback: str) -> str:
-        client = self._ensure_client()
-        if client is None:
-            return fallback
-
-        try:
-            response = client.messages.create(
+    def _invoke_session(self, session: Any, user_content: str) -> Any:
+        messages_client = getattr(session, "messages", None)
+        if messages_client and hasattr(messages_client, "create"):
+            return messages_client.create(
                 model=self._model,
                 max_tokens=256,
                 temperature=0.2,
                 system=self.system_prompt,
                 messages=[{"role": "user", "content": user_content}],
             )
-            content = response.content
-            if not content:
-                return fallback
-            first_block = content[0]
-            text = getattr(first_block, "text", "")
-            return text.strip() or fallback
+
+        for candidate in ("complete", "send", "chat", "run"):
+            handler = getattr(session, candidate, None)
+            if handler:
+                return handler(user_content)  # type: ignore[misc]
+
+        raise RuntimeError("Claude Agent SDK session 不支持的接口")
+
+    @staticmethod
+    def _extract_response_text(response: Any) -> str:
+        if isinstance(response, str):
+            return response.strip()
+
+        if isinstance(response, Mapping):
+            if "text" in response:
+                return str(response["text"]).strip()
+            content = response.get("content")
+            if isinstance(content, str):
+                return content.strip()
+            if isinstance(content, Sequence):
+                for block in content:
+                    text = getattr(block, "text", None) or (
+                        block.get("text") if isinstance(block, Mapping) else None
+                    )  # type: ignore[arg-type]
+                    if text:
+                        return str(text).strip()
+
+        if hasattr(response, "text"):
+            return str(getattr(response, "text")).strip()
+
+        content = getattr(response, "content", None)
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, Sequence):
+            for block in content:
+                text = getattr(block, "text", None) or (
+                    block.get("text") if isinstance(block, Mapping) else None
+                )  # type: ignore[arg-type]
+                if text:
+                    return str(text).strip()
+
+        return ""
+
+    def _call_model(self, user_content: str, fallback: str) -> str:
+        session = self._ensure_session()
+        if session is None:
+            return fallback
+
+        try:
+            response = self._invoke_session(session, user_content)
+            text = self._extract_response_text(response)
+            return text or fallback
         except Exception as exc:  # noqa: BLE001
             self._console.print(f"[yellow]调用 Claude 失败，使用内置提示：{exc}[/]")
             return fallback
@@ -312,6 +359,16 @@ def _summarize_config(config: GenerationConfig) -> None:
     console.print(table)
 
 
+def _make_jsonable(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {key: _make_jsonable(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_make_jsonable(item) for item in value]
+    return value
+
+
 @dataclass
 class RenderResult:
     script_path: Path
@@ -340,15 +397,18 @@ def _render_files(config: GenerationConfig) -> RenderResult:
             "typer",
             "rich",
             "openai",
-            "claude-agent-sdk",
-            "anthropic",
+            "claude-agent-sdk==0.1.17",
         ],
         "scenario": config.scenario,
         "generated_at": datetime.utcnow().isoformat(),
         "generator": "lazydspy CLI",
     }
 
-    generation_payload = config.model_dump(mode="json")
+    if hasattr(config, "model_dump"):
+        generation_payload = config.model_dump(mode="json")  # type: ignore[call-arg]
+    else:  # pragma: no cover - compatibility for pydantic v1 in test stubs
+        generation_payload = dict(getattr(config, "__dict__", {}))
+    generation_payload = _make_jsonable(generation_payload)
     generation_payload["session_token"] = uuid4().hex
     generation_payload["metadata"] = metadata
 
@@ -752,19 +812,6 @@ def run_chat() -> None:
         console.print("[blue]请在运行时确保 checkpoint 路径可用。[/]")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="lazydspy CLI")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    chat_parser = subparsers.add_parser("chat", help="使用 Claude 多轮问答收集配置")
-    chat_parser.set_defaults(func=lambda _args: run_chat())
-
-    optimize_parser = subparsers.add_parser("optimize", help="运行 GEPA 优化示例")
-    optimize_parser.set_defaults(func=lambda _args: run_optimize())
-
-    return parser
-
-
 def run_optimize() -> None:
     from lazydspy import optimize
 
@@ -772,9 +819,11 @@ def run_optimize() -> None:
 
 
 def main(argv: Iterable[str] | None = None) -> None:
-    parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
-    args.func(args)
+    args = list(argv) if argv is not None else None
+    try:
+        app(args=args, standalone_mode=False)
+    except typer.Exit as exc:  # pragma: no cover - passthrough for Typer exit handling
+        raise SystemExit(exc.exit_code) from exc
 
 
 def _build_agent_session() -> AgentSession:
@@ -782,4 +831,21 @@ def _build_agent_session() -> AgentSession:
     return AgentSession(console, system_prompt=system_prompt)
 
 
-__all__ = ["AgentSession", "GenerationConfig", "main", "run_chat", "run_optimize"]
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Rich/ Typer 驱动的 lazydspy CLI，包含 chat 与 optimize 子命令。",
+)
+
+
+@app.command(help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
+def chat() -> None:
+    run_chat()
+
+
+@app.command(help="运行 GEPA 优化示例。")
+def optimize() -> None:
+    run_optimize()
+
+
+__all__ = ["AgentSession", "GenerationConfig", "app", "main", "run_chat", "run_optimize"]

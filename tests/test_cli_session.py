@@ -5,11 +5,6 @@ import types
 
 import pytest
 
-# 提前注入 anthropic stub，避免环境缺失依赖导致导入失败。
-_anthropic_stub = types.ModuleType("anthropic")
-_anthropic_stub.Anthropic = object  # type: ignore[assignment]
-sys.modules.setdefault("anthropic", _anthropic_stub)
-
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
@@ -20,10 +15,10 @@ from lazydspy import cli  # noqa: E402
 def test_agent_session_fallback_when_client_init_fails(monkeypatch: pytest.MonkeyPatch):
     """初始化失败时，提问应回退到本地提示。"""
 
-    def broken_client():
+    def broken_session(_self):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr(cli, "Anthropic", broken_client)
+    monkeypatch.setattr(cli.AgentSession, "_build_sdk_session", broken_session)
 
     session = cli.AgentSession(cli.console)
     prompt = session.ask("示例提示")
@@ -40,7 +35,7 @@ def test_agent_session_confirm_fallback(monkeypatch: pytest.MonkeyPatch):
         def create(self, **kwargs):
             raise RuntimeError("offline")
 
-    session._client = types.SimpleNamespace(messages=BrokenMessages())
+    session._session = types.SimpleNamespace(messages=BrokenMessages())
 
     confirmation = session.confirm("摘要内容")
 
@@ -61,7 +56,7 @@ def test_agent_session_summarize_fallback(monkeypatch: pytest.MonkeyPatch):
     """无可用客户端时，应输出简短的本地摘要。"""
 
     session = cli.AgentSession(cli.console)
-    monkeypatch.setattr(session, "_ensure_client", lambda: None)
+    monkeypatch.setattr(session, "_ensure_session", lambda: None)
 
     summary = session.summarize({"mode": "quick", "algorithm": "gepa"})
 
