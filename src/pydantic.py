@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
 
+class ConfigDict(dict[str, Any]):
+    """轻量替代，用于兼容 pydantic.ConfigDict 行为."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
+
 @dataclass
 class FieldInfo:
     """字段元信息，记录默认值与范围约束。"""
@@ -97,4 +104,13 @@ class BaseModel:
         return cls(**data)
 
 
-__all__ = ["BaseModel", "Field", "ValidationError"]
+def field_validator(*_fields: str, **_kwargs: Any):
+    """占位 field_validator，直接返回原函数。"""
+
+    def decorator(func: Any) -> Any:
+        return func
+
+    return decorator
+
+
+__all__ = ["BaseModel", "ConfigDict", "Field", "ValidationError", "field_validator"]
