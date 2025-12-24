@@ -26,17 +26,13 @@ The outer CLI is now powered by [Typer](https://typer.tiangolo.com/) with Rich o
   uv run lazydspy chat
   ```
 
-- Run the bundled GEPA optimization example:
-
-  ```bash
-  uv run lazydspy optimize
-  ```
-
 - Generated `pipeline.py` scripts embed dependencies via [PEP 723](https://peps.python.org/pep-0723/) blocks, so you can run them directly with uv, e.g.:
 
   ```bash
   uv run pipeline.py --mode quick
   ```
+
+- Optimization should be performed with the generated script (see the `uv run pipeline.py` example above); the previous bundled demo has been removed.
 
 ## Checks
 
