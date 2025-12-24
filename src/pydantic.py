@@ -66,9 +66,15 @@ ModelT = TypeVar("ModelT", bound="BaseModel")
 class BaseModel:
     """最小化的 BaseModel，实现必填与 ge/le 校验。"""
 
+    # 模拟 pydantic 的 model_fields 暴露注解。
+    model_fields: Dict[str, Any] = {}
+    _model_validator_flag = "_is_model_validator"
+
     def __init__(self, **data: Any) -> None:
         errors: List[Dict[str, Any]] = []
         annotations = getattr(self.__class__, "__annotations__", {})
+        # 将注解暴露为 model_fields，方便校验器读取。
+        self.__class__.model_fields = dict(annotations)
         for name, annotation in annotations.items():
             field_obj = getattr(self.__class__, name, None)
             required = (
@@ -115,11 +121,29 @@ class BaseModel:
         if errors:
             raise ValidationError(errors)
 
+        # 执行 model_validator 标记的方法（after 模式）。
+        for attribute in dir(self):
+            candidate = getattr(self, attribute)
+            if callable(candidate) and getattr(candidate, self._model_validator_flag, False):
+                maybe_self = candidate()
+                if maybe_self is not None:
+                    # 允许校验器返回更新后的 self。
+                    self = maybe_self
+
+    def __init_subclass__(cls) -> None:
+        super().__init_subclass__()
+        cls.model_fields = dict(getattr(cls, "__annotations__", {}))
+
     @classmethod
     def model_validate(cls: Type[ModelT], data: Dict[str, Any]) -> ModelT:
         """兼容 pydantic 的替代校验方法。"""
 
         return cls(**data)
+
+    def model_dump(self, mode: str | None = None) -> Dict[str, Any]:
+        """返回当前实例数据字典。"""
+
+        return dict(getattr(self, "__dict__", {}))
 
 
 FuncT = TypeVar("FuncT", bound=Callable[..., Any])
@@ -134,4 +158,21 @@ def field_validator(*_fields: str, **_kwargs: Any) -> Callable[[FuncT], FuncT]:
     return decorator
 
 
-__all__ = ["BaseModel", "ConfigDict", "Field", "ValidationError", "field_validator"]
+def model_validator(*_fields: str, **_kwargs: Any) -> Callable[[FuncT], FuncT]:
+    """占位 model_validator，直接返回原函数。"""
+
+    def decorator(func: FuncT) -> FuncT:
+        setattr(func, BaseModel._model_validator_flag, True)
+        return func
+
+    return decorator
+
+
+__all__ = [
+    "BaseModel",
+    "ConfigDict",
+    "Field",
+    "ValidationError",
+    "field_validator",
+    "model_validator",
+]

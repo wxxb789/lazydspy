@@ -14,11 +14,24 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, cast
 from uuid import uuid4
 
 import typer
+from lazydspy.models import (
+    GEPA_PRESETS,
+    MIPROV2_PRESETS,
+    GEPAHyperparameters,
+    MIPROv2Hyperparameters,
+    RunMode,
+)
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 console = Console()
 
@@ -34,14 +47,16 @@ class GenerationConfig(BaseModel):
     output_fields: List[str] = Field(..., description="输出字段")
     model_preference: str = Field(..., description="模型偏好，例如 claude-3-5-sonnet-20241022")
     algorithm: str = Field(..., description="GEPA 或 MIPROv2")
-    hyperparameters: Dict[str, Any] = Field(default_factory=dict, description="优化超参")
+    hyperparameters: GEPAHyperparameters | MIPROv2Hyperparameters | Dict[str, Any] = Field(
+        default_factory=dict, description="优化超参（可为空，按模式应用默认值）"
+    )
     data_path: Path | None = Field(default=None, description="数据路径")
     mode: str = Field(default="quick", description="quick 或 full 模式")
     subset_size: int | None = Field(default=None, description="quick 模式的子集大小")
     checkpoint_needed: bool = Field(default=False, description="是否需要 checkpoint")
     checkpoint_dir: Path = Field(default=Path("checkpoints"), description="Checkpoint 目录")
-    checkpoint_interval: int = Field(default=2, description="Checkpoint 间隔（步数）")
-    max_checkpoints: int = Field(default=3, description="最多保留多少个 checkpoint")
+    checkpoint_interval: int = Field(default=1, description="Checkpoint 间隔（步数）")
+    max_checkpoints: int = Field(default=20, description="最多保留多少个 checkpoint")
     resume: bool = Field(default=False, description="是否尝试从 checkpoint 恢复")
     generate_sample_data: bool = Field(
         default=False, description="是否生成 sample-data/train.jsonl 示例"
@@ -68,6 +83,8 @@ class GenerationConfig(BaseModel):
     @field_validator("hyperparameters", mode="before")
     @classmethod
     def parse_hyperparameters(cls, value: Any) -> Dict[str, Any]:
+        if isinstance(value, BaseModel):
+            return value.model_dump()
         if isinstance(value, dict):
             return value
         if isinstance(value, str):
@@ -140,6 +157,33 @@ class GenerationConfig(BaseModel):
             raise ValueError("must be a positive integer")
         return parsed
 
+    @model_validator(mode="after")
+    def apply_hyperparameter_presets(self) -> "GenerationConfig":
+        overrides: Dict[str, Any]
+        if isinstance(self.hyperparameters, BaseModel):
+            overrides = self.hyperparameters.model_dump()
+        elif isinstance(self.hyperparameters, dict):
+            overrides = {k: v for k, v in self.hyperparameters.items() if v is not None}
+        else:
+            overrides = {}
+
+        normalized_algo = self.algorithm.lower().replace("-", "").replace("_", "")
+        run_mode = cast(RunMode, self.mode)
+        if normalized_algo == "gepa":
+            self.hyperparameters = GEPAHyperparameters.from_mode(run_mode, overrides)
+        else:
+            self.hyperparameters = MIPROv2Hyperparameters.from_mode(run_mode, overrides)
+        return self
+
+    @property
+    def active_hyperparameters(self) -> Dict[str, Any]:
+        """Return the resolved hyperparameters dict for the selected algorithm."""
+        if isinstance(self.hyperparameters, BaseModel):
+            return self.hyperparameters.model_dump()
+        if isinstance(self.hyperparameters, dict):
+            return {k: v for k, v in self.hyperparameters.items() if v is not None}
+        return {}
+
 
 @dataclass
 class Question:
@@ -164,7 +208,7 @@ class AgentSession:
         self._model = "claude-3-5-sonnet-20241022"
 
     def _build_sdk_session(self) -> Any:
-        from claude_agent_sdk import Session
+        from claude_agent_sdk import Session  # type: ignore[attr-defined]
 
         return Session(system_prompt=self.system_prompt, model=self._model)
 
@@ -300,7 +344,10 @@ QUESTIONS: List[Question] = [
     Question("algorithm", "选择优化算法（GEPA 或 MIPROv2），并说明原因。"),
     Question(
         "hyperparameters",
-        "提供关键超参，格式 key=value, key2=value2，例如 depth=3, lr=0.1。",
+        (
+            "如需覆盖 GEPA(breadth/depth/temperature) 或 MIPROv2(search_size 等) 的默认超参，"
+            "请以 key=value 输入，留空沿用 quick/full 预设。"
+        ),
     ),
     Question("data_path", "训练/验证数据路径，支持相对路径或绝对路径。"),
     Question(
@@ -359,7 +406,7 @@ def _summarize_config(config: GenerationConfig) -> None:
     table.add_row("输出字段", ", ".join(config.output_fields))
     table.add_row("模型偏好", config.model_preference)
     table.add_row("算法", config.algorithm)
-    table.add_row("超参", json.dumps(config.hyperparameters, ensure_ascii=False))
+    table.add_row("超参", json.dumps(config.active_hyperparameters, ensure_ascii=False))
     table.add_row("数据路径", str(config.data_path) if config.data_path else "<未指定>")
     table.add_row("模式", config.mode)
     subset_display = str(config.subset_size) if config.subset_size else "auto"
@@ -376,6 +423,8 @@ def _summarize_config(config: GenerationConfig) -> None:
 def _make_jsonable(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, BaseModel):
+        return _make_jsonable(value.model_dump())
     if isinstance(value, Mapping):
         return {key: _make_jsonable(val) for key, val in value.items()}
     if isinstance(value, (list, tuple)):
@@ -409,7 +458,6 @@ def _render_files(config: GenerationConfig) -> RenderResult:
         "typer",
         "rich",
         "openai",
-        "claude-agent-sdk==0.1.17",
         "anthropic",
     ]
     python_requirement = ">=3.12"
@@ -428,6 +476,12 @@ def _render_files(config: GenerationConfig) -> RenderResult:
     else:  # pragma: no cover - compatibility for pydantic v1 in test stubs
         generation_payload = dict(getattr(config, "__dict__", {}))
     generation_payload = _make_jsonable(generation_payload)
+    generation_payload["hyperparameters"] = config.active_hyperparameters
+    generation_payload["hyperparameters_resolved"] = config.active_hyperparameters
+    generation_payload["hyperparameter_defaults"] = {
+        "gepa": GEPA_PRESETS,
+        "miprov2": MIPROV2_PRESETS,
+    }
     generation_payload["session_token"] = uuid4().hex
     generation_payload["metadata"] = metadata
 
@@ -459,9 +513,10 @@ def _render_files(config: GenerationConfig) -> RenderResult:
             from __future__ import annotations
 
             import json
+            import math
             from datetime import datetime
             from pathlib import Path
-            from typing import Any, Dict, Iterable, List, Literal, Sequence
+            from typing import Any, Callable, Dict, Iterable, List, Literal, Sequence
 
             import dspy
             import typer
@@ -472,6 +527,19 @@ def _render_files(config: GenerationConfig) -> RenderResult:
 
             METADATA: Dict[str, Any] = $metadata_json
             GENERATION_CONFIG: Dict[str, Any] = $generation_json
+            HYPERPARAMETER_DEFAULTS: Dict[str, Dict[str, Dict[str, Any]]] = GENERATION_CONFIG.get(
+                "hyperparameter_defaults",
+                {
+                    "gepa": {
+                        "quick": {"breadth": 2, "depth": 2, "temperature": 0.3},
+                        "full": {"breadth": 4, "depth": 4, "temperature": 0.7},
+                    },
+                    "miprov2": {
+                        "quick": {"search_size": 8, "temperature": 0.3},
+                        "full": {"search_size": 16, "temperature": 0.6},
+                    },
+                },
+            )
 
 
             class DataRow(BaseModel):
@@ -511,7 +579,60 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                 return examples
 
 
-            def _build_optimizer(algorithm: str, hyperparameters: Dict[str, Any]) -> Any:
+            def _select_hyperparameters(
+                algorithm: str, mode: str, overrides: Dict[str, Any] | None
+            ) -> Dict[str, Any]:
+                normalized = algorithm.lower()
+                defaults = HYPERPARAMETER_DEFAULTS.get(normalized, {})
+                preset = dict(defaults.get(mode, defaults.get("quick", {})))
+                for key, value in (overrides or {}).items():
+                    if key in preset:
+                        preset[key] = value
+                return preset
+
+
+            def _resolve_models(algorithm: str, mode: str, preference: str) -> tuple[Any, Any]:
+                preferred = preference or "gpt-4o"
+                fast_model = "gpt-4o-mini"
+                normalized = algorithm.lower()
+                if normalized == "gepa":
+                    prompt_name = preferred if mode == "full" else fast_model
+                else:
+                    prompt_name = fast_model if mode == "quick" else preferred
+                prompt_model = dspy.OpenAI(model=prompt_name)
+                teacher_model = dspy.OpenAI(model=preferred)
+                return prompt_model, teacher_model
+
+
+            def _build_metric(
+                output_fields: Sequence[str],
+            ) -> Callable[[Any, Any, Any | None], float]:
+                target_field = output_fields[0] if output_fields else None
+
+                def _metric(example: Any, pred: Any, trace: Any | None = None) -> float:
+                    if not target_field:
+                        return 0.0
+                    expected = getattr(example, target_field, None)
+                    if expected is None and isinstance(example, dict):
+                        expected = example.get(target_field)
+                    actual = getattr(pred, target_field, None)
+                    if actual is None and isinstance(pred, dict):
+                        actual = pred.get(target_field)
+                    if expected is None or actual is None:
+                        return 0.0
+                    return 1.0 if str(expected).strip() == str(actual).strip() else 0.0
+
+                return _metric
+
+
+            def _build_optimizer(
+                algorithm: str,
+                hyperparameters: Dict[str, Any],
+                mode: str,
+                metric: Any,
+                prompt_model: Any,
+                teacher_model: Any,
+            ) -> Any:
                 normalized = algorithm.lower()
                 if normalized == "gepa":
                     cls = getattr(dspy, "GEvalPromptedAssembly", None)
@@ -519,11 +640,10 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                     cls = getattr(dspy, "MIPROv2", None)
                 if cls is None:
                     raise RuntimeError(f"DSPy 未提供 {algorithm}")
-                return cls(
-                    metric=None,
-                    prompt_model=dspy.OpenAI(model="gpt-4o"),
-                    **hyperparameters,
-                )
+                configure = getattr(dspy, "configure", None)
+                if callable(configure):
+                    configure(lm=prompt_model, teacher_model=teacher_model)
+                return cls(metric=metric, prompt_model=prompt_model, **hyperparameters)
 
 
             def _chunk_dataset(examples: List[dspy.Example], size: int) -> List[List[dspy.Example]]:
@@ -532,14 +652,30 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                 return [examples[idx : idx + size] for idx in range(0, len(examples), size)]
 
 
+            def _determine_chunk_size(total_examples: int, max_checkpoints: int) -> int:
+                target = max(1, min(20, max_checkpoints))
+                if max_checkpoints >= 10:
+                    target = max(target, 10)
+                if total_examples <= 0:
+                    return 0
+                return max(1, math.ceil(total_examples / target))
+
+
             def _save_checkpoint(
-                program: Any, checkpoint_dir: Path, step: int, max_keep: int
+                program: Any,
+                checkpoint_dir: Path,
+                step: int,
+                max_keep: int,
+                seed_prompt: str,
+                best_score: float | None,
             ) -> Path:
                 checkpoint_dir.mkdir(parents=True, exist_ok=True)
                 payload = {
                     "step": step,
                     "prompt": getattr(program, "prompt", ""),
                     "meta": getattr(program, "meta", {}),
+                    "seed_prompt": seed_prompt,
+                    "best_score": best_score,
                     "saved_at": datetime.utcnow().isoformat(),
                 }
                 path = checkpoint_dir / f"checkpoint-{step:04d}.json"
@@ -561,8 +697,10 @@ def _render_files(config: GenerationConfig) -> RenderResult:
 
 
             def _resolve_prompt(config: Dict[str, Any], checkpoint: Dict[str, Any] | None) -> str:
-                if checkpoint and checkpoint.get("prompt"):
-                    return str(checkpoint["prompt"])
+                if checkpoint:
+                    for key in ("seed_prompt", "prompt"):
+                        if checkpoint.get(key):
+                            return str(checkpoint[key])
                 seed = config.get("seed_prompt") or "<<your prompt>>"
                 scenario = config.get("scenario", "DSPy pipeline")
                 return f"{seed}\\n[场景] {scenario}"
@@ -625,6 +763,7 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                 if not train_examples:
                     raise RuntimeError("缺少训练数据")
 
+                output_fields = list(runtime.get("output_fields", []))
                 effective_subset = (
                     subset_size if mode == "quick" and subset_size else len(train_examples)
                 )
@@ -632,27 +771,56 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                     train_examples = train_examples[:effective_subset]
                     dev_examples = dev_examples[: max(1, min(len(dev_examples), effective_subset))]
 
+                metric = _build_metric(output_fields)
+                hyper_overrides = runtime.get("hyperparameters_resolved") or runtime.get(
+                    "hyperparameters", {}
+                )
+                hyperparameters = _select_hyperparameters(
+                    runtime["algorithm"], mode, hyper_overrides
+                )
+                prompt_model, teacher_model = _resolve_models(
+                    runtime["algorithm"], mode, runtime.get("model_preference", "")
+                )
                 optimizer = _build_optimizer(
-                    runtime["algorithm"], runtime.get("hyperparameters", {})
+                    runtime["algorithm"], hyperparameters, mode, metric, prompt_model, teacher_model
                 )
 
                 resume_state = _load_latest_checkpoint(checkpoint_dir) if resume else None
                 seed_prompt = _resolve_prompt(runtime, resume_state)
                 start_step = int(resume_state["step"]) + 1 if resume_state else 1
+                if resume_state:
+                    recovered_score = resume_state.get("best_score")
+                    resume_message = f"从 step {resume_state.get('step', 0)} 恢复"
+                    if recovered_score is not None:
+                        resume_message += f"，score={recovered_score}"
+                    console.print(f"[cyan]{resume_message}[/]")
 
-                batches = _chunk_dataset(
-                    train_examples, effective_subset if mode == "quick" else len(train_examples)
-                )
+                chunk_size = _determine_chunk_size(len(train_examples), max_checkpoints)
+                batches = _chunk_dataset(train_examples, chunk_size)
                 if not batches:
                     raise RuntimeError("缺少训练数据")
 
                 program = None
+                best_overall: float | None = None
                 for offset, batch in enumerate(batches, start=start_step):
                     program = optimizer.compile(
                         trainset=batch, valset=dev_examples, seed_prompt=seed_prompt
                     )
+                    seed_prompt = getattr(program, "prompt", seed_prompt)
+                    meta = getattr(program, "meta", {}) or {}
+                    best_score = getattr(program, "score", None) or meta.get("score") or meta.get(
+                        "best_score"
+                    )
+                    best_overall = best_score if best_score is not None else best_overall
                     if offset % checkpoint_interval == 0:
-                        saved = _save_checkpoint(program, checkpoint_dir, offset, max_checkpoints)
+                        saved = _save_checkpoint(
+                            program,
+                            checkpoint_dir,
+                            offset,
+                            max_checkpoints,
+                            seed_prompt,
+                            best_score if best_score is not None else best_overall,
+                        )
                         console.print(f"[green]已保存 checkpoint: {saved}[/]")
 
                 if program is None:
@@ -663,6 +831,8 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                 checkpoint_dir.mkdir(parents=True, exist_ok=True)
                 final_prompt_path.write_text(str(final_prompt), encoding="utf-8")
 
+                if best_overall is not None:
+                    console.print(f"[cyan]最佳得分: {best_overall}[/]")
                 console.print("[bold cyan]最终 Prompt:[/]\\n" + str(final_prompt))
                 console.print(f"[green]已保存最终 Prompt 到 {final_prompt_path}[/]")
 
@@ -880,7 +1050,7 @@ app = typer.Typer(
 )
 
 
-@app.command(help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")  # type: ignore[misc]
+@app.command(help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
 def chat() -> None:
     run_chat()
 

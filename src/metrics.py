@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, TypedDict
 
-try:
-    from openai import OpenAI
-except Exception:  # pragma: no cover - 运行时环境可能缺少依赖
-    OpenAI = None
-
 from lazydspy.schemas import ScoreDetail
+
+_OpenAI: Any
+try:
+    from openai import OpenAI as _OpenAI
+except Exception:  # pragma: no cover - 运行时环境可能缺少依赖
+    _OpenAI = None
+
+# 允许静态类型检查，将 OpenAI 保持为宽松类型。
+OpenAI: Any = _OpenAI
 
 
 class _ChoiceMessage(TypedDict):
