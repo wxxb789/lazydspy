@@ -487,6 +487,7 @@ def _render_files(config: GenerationConfig) -> Path:
 
                 final_prompt = getattr(program, "prompt", "")
                 final_prompt_path = checkpoint_dir / "final_prompt.txt"
+                checkpoint_dir.mkdir(parents=True, exist_ok=True)
                 final_prompt_path.write_text(str(final_prompt), encoding="utf-8")
 
                 console.print("[bold cyan]最终 Prompt:[/]\\n" + str(final_prompt))
