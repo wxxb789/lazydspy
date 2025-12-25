@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import subprocess
@@ -238,16 +239,60 @@ def _recommend_strategy(config: GenerationConfig) -> tuple[str, str, Dict[str, A
 class AgentSession:
     """Lightweight wrapper to orchestrate asking, confirming, and summarizing."""
 
-    def __init__(self, console: Console, system_prompt: str | None = None) -> None:
+    DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+
+    def __init__(
+        self,
+        console: Console,
+        system_prompt: str | None = None,
+        *,
+        model: str | None = None,
+        base_url: str | None = None,
+        auth_token: str | None = None,
+        agent_env: Mapping[str, str] | None = None,
+        denied_tools: Sequence[str] | None = None,
+    ) -> None:
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self._console = console
         self._session: Any | None = None
-        self._model = "claude-3-5-sonnet-20241022"
+        self._model = model or self.DEFAULT_MODEL
+        self._base_url = base_url
+        self._auth_token = auth_token
+        self._agent_env = {str(k): str(v) for k, v in (agent_env or {}).items() if str(v).strip()}
+        self._denied_tools = [tool for tool in (denied_tools or []) if str(tool).strip()]
 
     def _build_sdk_session(self) -> Any:
         from claude_agent_sdk import Session  # type: ignore[attr-defined]
 
-        return Session(system_prompt=self.system_prompt, model=self._model)
+        if self._base_url:
+            os.environ.setdefault("ANTHROPIC_BASE_URL", self._base_url)
+        if self._auth_token:
+            os.environ.setdefault("ANTHROPIC_AUTH_TOKEN", self._auth_token)
+            os.environ.setdefault("ANTHROPIC_API_KEY", self._auth_token)
+        os.environ.setdefault("ANTHROPIC_MODEL", self._model)
+        for key, value in self._agent_env.items():
+            os.environ.setdefault(key, value)
+
+        kwargs: Dict[str, Any] = {
+            "system_prompt": self.system_prompt,
+            "model": self._model,
+        }
+
+        init_params = set(inspect.signature(Session).parameters)
+        if self._base_url and "base_url" in init_params:
+            kwargs["base_url"] = self._base_url
+        if self._auth_token:
+            if "api_key" in init_params:
+                kwargs["api_key"] = self._auth_token
+            elif "auth_token" in init_params:
+                kwargs["auth_token"] = self._auth_token
+        if self._agent_env and "env" in init_params:
+            kwargs["env"] = dict(self._agent_env)
+        if self._denied_tools and {"disallowed_tools", "denied_tools"} & init_params:
+            target_key = "disallowed_tools" if "disallowed_tools" in init_params else "denied_tools"
+            kwargs[target_key] = list(self._denied_tools)
+
+        return Session(**kwargs)
 
     def _ensure_session(self) -> Any | None:
         if self._session is not None:
@@ -424,6 +469,58 @@ QUESTIONS: List[Question] = [
         post_process=lambda x: x.strip().lower() in {"y", "yes", "true", "1"},
     ),
 ]
+
+
+def _load_agent_profile(profile_path: Path | None) -> tuple[Dict[str, str], List[str]]:
+    """Load agent env/permission hints from a JSON profile."""
+
+    if profile_path is None:
+        return {}, []
+
+    resolved_path = profile_path.expanduser()
+    if not resolved_path.exists():
+        console.print(f"[yellow]未找到 agent 配置文件：{resolved_path}，已忽略。[/]")
+        return {}, []
+
+    try:
+        raw = json.loads(resolved_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow]解析 agent 配置失败：{exc}，已忽略该文件。[/]")
+        return {}, []
+
+    env_data: Dict[str, str] = {}
+    permissions: List[str] = []
+
+    if isinstance(raw, Mapping) and isinstance(raw.get("env"), Mapping):
+        env_data = {
+            str(key): str(value)
+            for key, value in raw["env"].items()
+            if key and value is not None and str(value).strip()
+        }
+
+    perms_raw = raw.get("permissions") if isinstance(raw, Mapping) else None
+    if isinstance(perms_raw, Mapping) and isinstance(perms_raw.get("deny"), Sequence):
+        permissions = [str(item) for item in perms_raw["deny"] if str(item).strip()]
+
+    return env_data, permissions
+
+
+def _parse_agent_env_pairs(pairs: Sequence[str]) -> Dict[str, str]:
+    """Parse KEY=VALUE pairs into a dict, ignoring invalid entries."""
+
+    parsed: Dict[str, str] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            console.print(f"[yellow]忽略无效的 agent env：{pair}（缺少 =）[/]")
+            continue
+        key, value = pair.split("=", maxsplit=1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            console.print(f"[yellow]忽略无效的 agent env：{pair}（缺少 key 或 value）[/]")
+            continue
+        parsed[key] = value
+    return parsed
 
 
 def _ask_user(session: AgentSession, question: Question) -> Any:
@@ -1093,9 +1190,24 @@ def _run_quality_checks(script_path: Path) -> None:
             console.print(f"[red]{name} 校验未通过，请根据输出修复 {script_path}。[/]")
 
 
-def run_chat() -> None:
+def run_chat(
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+    auth_token: str | None = None,
+    agent_config: Path | None = None,
+    agent_env: Mapping[str, str] | None = None,
+    deny_permissions: Sequence[str] | None = None,
+) -> None:
     console.print("[bold]开始多轮问答，收集 GenerationConfig[/]")
-    session = _build_agent_session()
+    session = _build_agent_session(
+        model=model,
+        base_url=base_url,
+        auth_token=auth_token,
+        agent_config=agent_config,
+        agent_env=agent_env,
+        deny_permissions=deny_permissions,
+    )
     answers: Dict[str, Any] = {}
     for question in QUESTIONS:
         answers[question.key] = _ask_user(session, question)
@@ -1155,9 +1267,80 @@ def main(argv: Iterable[str] | None = None) -> None:
         raise SystemExit(exc.exit_code) from exc
 
 
-def _build_agent_session() -> AgentSession:
+def _build_agent_session(
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+    auth_token: str | None = None,
+    agent_config: Path | None = None,
+    agent_env: Mapping[str, str] | None = None,
+    deny_permissions: Sequence[str] | None = None,
+) -> AgentSession:
     system_prompt = os.getenv("LAZYDSPY_SYSTEM_PROMPT") or DEFAULT_SYSTEM_PROMPT
-    return AgentSession(console, system_prompt=system_prompt)
+
+    profile_env, profile_denies = _load_agent_profile(agent_config)
+
+    merged_env: Dict[str, str] = {}
+    merged_env.update(profile_env)
+    if agent_env:
+        merged_env.update({str(k): str(v) for k, v in agent_env.items() if str(v).strip()})
+
+    for key, value in merged_env.items():
+        os.environ.setdefault(key, value)
+
+    merged_denies: List[str] = list(profile_denies)
+    if deny_permissions:
+        merged_denies.extend([str(item) for item in deny_permissions if str(item).strip()])
+    merged_denies = list(dict.fromkeys(merged_denies))  # 去重并保持顺序
+
+    def _normalize(value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    user_model = _normalize(model)
+    profile_model = _normalize(merged_env.get("ANTHROPIC_MODEL"))
+    env_model = _normalize(os.getenv("ANTHROPIC_MODEL"))
+    resolved_model = user_model or profile_model or env_model or AgentSession.DEFAULT_MODEL
+
+    user_base_url = _normalize(base_url)
+    if base_url is not None and not user_base_url:
+        console.print(
+            "[yellow]传入的 --base-url 为空，已忽略并回退到默认 Anthropic Endpoint。[/]"
+        )
+
+    resolved_base_url = (
+        user_base_url or _normalize(merged_env.get("ANTHROPIC_BASE_URL")) or _normalize(os.getenv("ANTHROPIC_BASE_URL"))
+    )
+    resolved_auth_token = (
+        _normalize(auth_token)
+        or _normalize(merged_env.get("ANTHROPIC_AUTH_TOKEN"))
+        or _normalize(merged_env.get("ANTHROPIC_API_KEY"))
+        or _normalize(os.getenv("ANTHROPIC_AUTH_TOKEN"))
+        or _normalize(os.getenv("ANTHROPIC_API_KEY"))
+    )
+
+    if resolved_base_url and not resolved_auth_token:
+        console.print(
+            "[yellow]检测到 ANTHROPIC_BASE_URL 但未提供 ANTHROPIC_AUTH_TOKEN/ANTHROPIC_API_KEY，"
+            "可能导致自定义 Claude Endpoint 初始化失败。[/]"
+        )
+
+    if model is not None and not user_model:
+        console.print(
+            "[yellow]未提供有效的模型名称，已回退到默认 claude-3-5-sonnet-20241022。[/]"
+        )
+
+    return AgentSession(
+        console,
+        system_prompt=system_prompt,
+        model=resolved_model,
+        base_url=resolved_base_url,
+        auth_token=resolved_auth_token,
+        agent_env=merged_env,
+        denied_tools=merged_denies,
+    )
 
 
 app = typer.Typer(
@@ -1171,8 +1354,51 @@ app = typer.Typer(
 
 
 @app.command(help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
-def chat() -> None:
-    run_chat()
+def chat(
+    model: str = typer.Option(
+        None,
+        "--model",
+        "-m",
+        envvar="ANTHROPIC_MODEL",
+        help="自定义 Claude 模型名称（默认 claude-3-5-sonnet-20241022）。",
+    ),
+    base_url: str = typer.Option(
+        None,
+        "--base-url",
+        envvar="ANTHROPIC_BASE_URL",
+        help="自定义 Claude Endpoint，例如本地代理。",
+    ),
+    auth_token: str = typer.Option(
+        None,
+        "--auth-token",
+        envvar=["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+        help="Claude API Token，支持本地代理或官方 Key。",
+    ),
+    agent_config: Path | None = typer.Option(
+        None,
+        "--agent-config",
+        help="读取包含 env/permissions 字段的 JSON 配置文件，用于 Claude Agent SDK。",
+    ),
+    agent_env: List[str] | None = typer.Option(
+        None,
+        "--agent-env",
+        "-E",
+        help="以 KEY=VALUE 形式追加 Claude Agent SDK 环境变量，可重复传入。",
+    ),
+    deny_permission: List[str] | None = typer.Option(
+        None,
+        "--deny-permission",
+        help="显式禁用的工具/权限名称，可重复传入；与 agent 配置文件合并。",
+    ),
+) -> None:
+    run_chat(
+        model=model,
+        base_url=base_url,
+        auth_token=auth_token,
+        agent_config=agent_config,
+        agent_env=_parse_agent_env_pairs(agent_env or []),
+        deny_permissions=deny_permission or [],
+    )
 
 
 __all__ = ["AgentSession", "GenerationConfig", "app", "main", "run_chat"]

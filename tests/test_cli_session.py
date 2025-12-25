@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import sys
 import types
@@ -62,6 +63,75 @@ def test_agent_session_summarize_fallback(monkeypatch: pytest.MonkeyPatch):
 
     assert "mode: quick" in summary
     assert "algorithm: gepa" in summary
+
+
+def test_build_agent_session_respects_model_env(monkeypatch: pytest.MonkeyPatch):
+    """应允许通过环境变量或参数覆盖默认模型。"""
+
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")
+
+    session = cli._build_agent_session()
+
+    assert session._model == "claude-3-5-haiku-latest"
+
+
+def test_build_agent_session_warns_when_base_url_missing_token(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """缺少鉴权时应给出清晰警告。"""
+
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:8080")
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    messages: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda msg: messages.append(str(msg)))
+
+    session = cli._build_agent_session()
+
+    assert session._base_url == "http://localhost:8080"
+    assert any("自定义 Claude Endpoint 初始化失败" in msg for msg in messages)
+
+
+def test_build_agent_session_applies_agent_profile_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+):
+    """Agent 配置文件中的 env/permissions 应应用到 SDK 初始化。"""
+
+    profile_path = tmp_path / "agent.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "env": {
+                    "ANTHROPIC_BASE_URL": "http://localhost:4141",
+                    "ANTHROPIC_AUTH_TOKEN": "dummy",
+                    "ANTHROPIC_MODEL": "claude-opus-4.5",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4.5",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
+                    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                },
+                "permissions": {"deny": ["WebSearch"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    for key in [
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "DISABLE_NON_ESSENTIAL_MODEL_CALLS",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    session = cli._build_agent_session(agent_config=profile_path)
+
+    assert os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL") == "claude-opus-4.5"
+    assert os.getenv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") == "1"
+    assert "WebSearch" in session._denied_tools
 
 
 def _build_config(**kwargs):
