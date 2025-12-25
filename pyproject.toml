@@ -5,6 +5,7 @@ description = "CLI/Agent that collects requirements and generates ready-to-run D
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic",
     "dspy",
     "openai",
     "pydantic>=2",
