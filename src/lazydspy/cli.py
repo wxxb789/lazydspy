@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import os
@@ -68,14 +69,15 @@ class GenerationConfig(BaseModel):
         default=False, description="是否生成 sample-data/train.jsonl 示例"
     )
 
-    @field_validator("algorithm")
+    @field_validator("algorithm", mode="before")
     @classmethod
     def validate_algorithm(cls, value: str) -> str:
-        normalized = value.lower().replace("-", "").replace("_", "")
-        allowed = {"gepa", "miprov2", "mipro"}
-        if normalized not in allowed:
-            raise ValueError("algorithm must be GEPA or MIPROv2")
-        return "GEPA" if normalized == "gepa" else "MIPROv2"
+        normalized = str(value).lower().replace("-", "").replace("_", "")
+        if "gepa" in normalized:
+            return "GEPA"
+        if "miprov2" in normalized or "mipro" in normalized:
+            return "MIPROv2"
+        raise ValueError("algorithm must be GEPA or MIPROv2")
 
     @field_validator("input_fields", "output_fields", mode="before")
     @classmethod
@@ -139,7 +141,7 @@ class GenerationConfig(BaseModel):
             raise ValueError("mode must be quick or full")
         return normalized
 
-    @field_validator("subset_size")
+    @field_validator("subset_size", mode="before")
     @classmethod
     def validate_subset_size(cls, value: Any) -> int | None:
         if value is None or value == "":
@@ -213,6 +215,44 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+class _ClaudeQuerySession:
+    """Minimal adapter to use claude_agent_sdk.query() like a messages client."""
+
+    def __init__(self, *, options: Any, model: str, query_callable: Callable[..., Any]) -> None:
+        self._options = options
+        self._query = query_callable
+        self._model = model
+        self.messages = self
+
+    def create(
+        self, *, messages: Sequence[Mapping[str, Any]] | None = None, **_: Any
+    ) -> Mapping[str, Any]:
+        prompt = ""
+        for message in reversed(messages or []):
+            if message.get("role") == "user":
+                prompt = str(message.get("content", "")).strip()
+                break
+        return asyncio.run(self._run_query(prompt))
+
+    async def _run_query(self, prompt: str) -> Mapping[str, Any]:
+        content_parts: list[str] = []
+        async for message in self._query(prompt=prompt, options=self._options):
+            message_content = getattr(message, "content", None)
+            if isinstance(message_content, Sequence) and not isinstance(
+                message_content, (str, bytes)
+            ):
+                for block in message_content:
+                    text = getattr(block, "text", None)
+                    if isinstance(text, str):
+                        content_parts.append(text)
+            text_value = getattr(message, "text", None)
+            if isinstance(text_value, str):
+                content_parts.append(text_value)
+
+        combined = "".join(content_parts).strip()
+        return {"content": [{"text": combined}], "model": self._model}
+
+
 def _detect_scenario_type(scenario: str) -> str:
     lowered = scenario.lower()
     if any(keyword in lowered for keyword in ("摘要", "summary", "summarize", "总结")):
@@ -276,7 +316,7 @@ class AgentSession:
         self._denied_tools = [tool for tool in (denied_tools or []) if str(tool).strip()]
 
     def _build_sdk_session(self) -> Any:
-        from claude_agent_sdk import Session  # type: ignore[attr-defined]
+        import claude_agent_sdk
 
         if self._base_url:
             os.environ.setdefault("ANTHROPIC_BASE_URL", self._base_url)
@@ -292,21 +332,38 @@ class AgentSession:
             "model": self._model,
         }
 
-        init_params = set(inspect.signature(Session).parameters)
-        if self._base_url and "base_url" in init_params:
-            kwargs["base_url"] = self._base_url
-        if self._auth_token:
-            if "api_key" in init_params:
-                kwargs["api_key"] = self._auth_token
-            elif "auth_token" in init_params:
-                kwargs["auth_token"] = self._auth_token
-        if self._agent_env and "env" in init_params:
-            kwargs["env"] = dict(self._agent_env)
-        if self._denied_tools and {"disallowed_tools", "denied_tools"} & init_params:
-            target_key = "disallowed_tools" if "disallowed_tools" in init_params else "denied_tools"
-            kwargs[target_key] = list(self._denied_tools)
+        session_cls = getattr(claude_agent_sdk, "Session", None)
+        if session_cls is not None:
+            init_params = set(inspect.signature(session_cls).parameters)
+            if self._base_url and "base_url" in init_params:
+                kwargs["base_url"] = self._base_url
+            if self._auth_token:
+                if "api_key" in init_params:
+                    kwargs["api_key"] = self._auth_token
+                elif "auth_token" in init_params:
+                    kwargs["auth_token"] = self._auth_token
+            if self._agent_env and "env" in init_params:
+                kwargs["env"] = dict(self._agent_env)
+            if self._denied_tools and {"disallowed_tools", "denied_tools"} & init_params:
+                target_key = (
+                    "disallowed_tools" if "disallowed_tools" in init_params else "denied_tools"
+                )
+                kwargs[target_key] = list(self._denied_tools)
 
-        return Session(**kwargs)
+            return session_cls(**kwargs)
+
+        options_cls = getattr(claude_agent_sdk, "ClaudeAgentOptions", None)
+        sdk_query = getattr(claude_agent_sdk, "query", None)
+        if options_cls is not None and callable(sdk_query):
+            options = options_cls(
+                system_prompt=self.system_prompt,
+                model=self._model,
+                env=dict(self._agent_env),
+                disallowed_tools=list(self._denied_tools),
+            )
+            return _ClaudeQuerySession(options=options, model=self._model, query_callable=sdk_query)
+
+        raise RuntimeError("Claude Agent SDK session 不支持的接口")
 
     def _ensure_session(self) -> Any | None:
         if self._session is not None:
@@ -1479,6 +1536,12 @@ def _entrypoint(
 
 if hasattr(app, "callback"):
     app.callback(invoke_without_command=True)(_entrypoint)
+
+callback_register = getattr(app, "callback", None)
+if callable(callback_register):
+    _entrypoint = callback_register(invoke_without_command=True)(_entrypoint)
+else:
+    setattr(app, "_entrypoint", _entrypoint)
 
 
 @app.command(name="chat", help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
