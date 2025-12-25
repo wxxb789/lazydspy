@@ -1,4 +1,8 @@
-"""lazydspy package initialization."""
+"""lazydspy - Generate DSPy optimization scripts through conversation.
+
+This package provides an Agent-driven CLI tool that helps users create
+DSPy prompt optimization scripts through interactive dialogue.
+"""
 
 from __future__ import annotations
 
@@ -17,18 +21,25 @@ from .models import (
 )
 from .schemas import MetricResult, ScoreDetail
 
+__version__ = "0.1.0"
+
 __all__ = [
+    # Version
+    "__version__",
+    # CLI
+    "main",
+    # Models
+    "GenerationConfig",
     "GEPAHyperparameters",
     "MIPROv2Hyperparameters",
     "GEPA_PRESETS",
     "MIPROV2_PRESETS",
     "CheckpointSettings",
     "CheckpointState",
-    "GenerationConfig",
-    "MetricResult",
     "OptimizationResultSummary",
     "OptimizerChoice",
     "RunMode",
+    # Schemas
+    "MetricResult",
     "ScoreDetail",
-    "main",
 ]

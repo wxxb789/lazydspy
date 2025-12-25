@@ -25,6 +25,10 @@ def _install_rich_stub() -> None:
         def add_row(self, *args, **kwargs):
             return None
 
+    class _Markdown:
+        def __init__(self, *args, **kwargs):
+            return None
+
     rich = types.ModuleType("rich")
     rich_console = types.ModuleType("rich.console")
     rich_console.Console = _Console
@@ -35,28 +39,42 @@ def _install_rich_stub() -> None:
     rich_table = types.ModuleType("rich.table")
     rich_table.Table = _Table
 
+    rich_markdown = types.ModuleType("rich.markdown")
+    rich_markdown.Markdown = _Markdown
+
     sys.modules.setdefault("rich", rich)
     sys.modules.setdefault("rich.console", rich_console)
     sys.modules.setdefault("rich.panel", rich_panel)
     sys.modules.setdefault("rich.table", rich_table)
+    sys.modules.setdefault("rich.markdown", rich_markdown)
 
 
-def _install_claude_agent_sdk_stub() -> None:
-    """Register a claude-agent-sdk stub to avoid network-dependent imports."""
+def _install_anthropic_stub() -> None:
+    """Register an anthropic stub to avoid network-dependent imports."""
 
-    class _Session:
+    class _ContentBlock:
+        def __init__(self, block_type: str, text: str = "", **kwargs):
+            self.type = block_type
+            self.text = text
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class _Messages:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(
+                content=[_ContentBlock("text", text="Mock response")],
+                stop_reason="end_turn",
+            )
+
+    class _Anthropic:
         def __init__(self, *args, **kwargs):
-            self.system_prompt = kwargs.get("system_prompt")
-            self.model = kwargs.get("model")
+            self.api_key = kwargs.get("api_key")
             self.base_url = kwargs.get("base_url")
-            self.api_key = kwargs.get("api_key") or kwargs.get("auth_token")
-            self.env = kwargs.get("env") or {}
-            self.disallowed_tools = kwargs.get("disallowed_tools") or kwargs.get("denied_tools")
-            self.messages = types.SimpleNamespace(create=lambda **_kwargs: None)
+            self.messages = _Messages()
 
-    claude_agent_sdk = types.ModuleType("claude_agent_sdk")
-    claude_agent_sdk.Session = _Session  # type: ignore[attr-defined]
-    sys.modules.setdefault("claude_agent_sdk", claude_agent_sdk)
+    anthropic = types.ModuleType("anthropic")
+    anthropic.Anthropic = _Anthropic
+    sys.modules.setdefault("anthropic", anthropic)
 
 
 def _install_typer_stub() -> None:
@@ -72,6 +90,10 @@ def _install_typer_stub() -> None:
                 super().__init__()
                 self.exit_code = code
 
+        class _Context:
+            def __init__(self):
+                self.invoked_subcommand = None
+
         class _Typer:
             def __init__(self, *args, **kwargs):
                 self._commands = {}
@@ -84,18 +106,25 @@ def _install_typer_stub() -> None:
 
                 return decorator
 
+            def callback(self, *args, **kwargs):
+                def decorator(func):
+                    return func
+
+                return decorator
+
             def __call__(self, *args, **kwargs):
                 return None
 
         def _option(default=None, *args, **kwargs):
             return default
 
-        typer.Typer = _Typer  # type: ignore[attr-defined]
-        typer.Exit = _Exit  # type: ignore[attr-defined]
-        typer.Option = _option  # type: ignore[attr-defined]
+        typer.Typer = _Typer
+        typer.Exit = _Exit
+        typer.Option = _option
+        typer.Context = _Context
         sys.modules.setdefault("typer", typer)
 
 
 _install_rich_stub()
-_install_claude_agent_sdk_stub()
+_install_anthropic_stub()
 _install_typer_stub()
