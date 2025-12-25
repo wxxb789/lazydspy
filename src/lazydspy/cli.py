@@ -8,11 +8,12 @@ import json
 import os
 import subprocess
 import textwrap
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from string import Template
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Protocol, Sequence, cast
+from typing import Any, Callable, Deque, Dict, Iterable, List, Mapping, Protocol, Sequence, cast
 from uuid import uuid4
 
 import typer
@@ -218,10 +219,18 @@ DEFAULT_SYSTEM_PROMPT = (
 class _ClaudeQuerySession:
     """Minimal adapter to use claude_agent_sdk.query() like a messages client."""
 
-    def __init__(self, *, options: Any, model: str, query_callable: Callable[..., Any]) -> None:
+    def __init__(
+        self,
+        *,
+        options: Any,
+        model: str,
+        query_callable: Callable[..., Any],
+        stderr_tail: Deque[str] | None = None,
+    ) -> None:
         self._options = options
         self._query = query_callable
         self._model = model
+        self._stderr_tail = stderr_tail
         self.messages = self
 
     def create(
@@ -236,18 +245,22 @@ class _ClaudeQuerySession:
 
     async def _run_query(self, prompt: str) -> Mapping[str, Any]:
         content_parts: list[str] = []
-        async for message in self._query(prompt=prompt, options=self._options):
-            message_content = getattr(message, "content", None)
-            if isinstance(message_content, Sequence) and not isinstance(
-                message_content, (str, bytes)
-            ):
-                for block in message_content:
-                    text = getattr(block, "text", None)
-                    if isinstance(text, str):
-                        content_parts.append(text)
-            text_value = getattr(message, "text", None)
-            if isinstance(text_value, str):
-                content_parts.append(text_value)
+        try:
+            async with asyncio.timeout(15):
+                async for message in self._query(prompt=prompt, options=self._options):
+                    message_content = getattr(message, "content", None)
+                    if isinstance(message_content, Sequence) and not isinstance(
+                        message_content, (str, bytes)
+                    ):
+                        for block in message_content:
+                            text = getattr(block, "text", None)
+                            if isinstance(text, str):
+                                content_parts.append(text)
+                    text_value = getattr(message, "text", None)
+                    if isinstance(text_value, str):
+                        content_parts.append(text_value)
+        except TimeoutError as exc:
+            raise TimeoutError("Claude Agent SDK 响应超时，可能无法访问 Claude Endpoint。") from exc
 
         combined = "".join(content_parts).strip()
         return {"content": [{"text": combined}], "model": self._model}
@@ -314,6 +327,12 @@ class AgentSession:
         self._auth_token = auth_token
         self._agent_env = {str(k): str(v) for k, v in (agent_env or {}).items() if str(v).strip()}
         self._denied_tools = [tool for tool in (denied_tools or []) if str(tool).strip()]
+        self._stderr_tail: Deque[str] = deque(maxlen=8)
+        self._debug_agent_logs = os.getenv("LAZYDSPY_AGENT_DEBUG", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
 
     def _build_sdk_session(self) -> Any:
         import claude_agent_sdk
@@ -360,10 +379,30 @@ class AgentSession:
                 model=self._model,
                 env=dict(self._agent_env),
                 disallowed_tools=list(self._denied_tools),
+                stderr=self._capture_stderr,
             )
-            return _ClaudeQuerySession(options=options, model=self._model, query_callable=sdk_query)
+            return _ClaudeQuerySession(
+                options=options,
+                model=self._model,
+                query_callable=sdk_query,
+                stderr_tail=self._stderr_tail,
+            )
 
         raise RuntimeError("Claude Agent SDK session 不支持的接口")
+
+    def _capture_stderr(self, line: str) -> None:
+        cleaned = line.strip()
+        if not cleaned:
+            return
+        self._stderr_tail.append(cleaned)
+        if self._debug_agent_logs:
+            self._console.print(f"[grey58]Claude SDK stderr:[/] {cleaned}")
+
+    def _format_stderr_hint(self) -> str:
+        if not self._stderr_tail:
+            return ""
+        recent = " | ".join(self._stderr_tail)
+        return f"Claude Agent SDK stderr（最近）：{recent}"
 
     def _ensure_session(self) -> Any | None:
         if self._session is not None:
@@ -449,7 +488,14 @@ class AgentSession:
             text = self._extract_response_text(response)
             return text or fallback
         except Exception as exc:  # noqa: BLE001
-            self._console.print(f"[yellow]调用 Claude 失败，使用内置提示：{exc}[/]")
+            self._console.print(
+                "[yellow]调用 Claude 失败，使用内置提示。请根据 Claude Agent SDK 文档检查 "
+                "Claude Code CLI 是否可用、API Key/Endpoint 是否可访问。[/]"
+            )
+            stderr_hint = self._format_stderr_hint()
+            if stderr_hint:
+                self._console.print(f"[yellow]{stderr_hint}[/]")
+            self._console.print(f"[yellow]原始错误：{exc}[/]")
             return fallback
 
     def ask(self, hint: str) -> str:
