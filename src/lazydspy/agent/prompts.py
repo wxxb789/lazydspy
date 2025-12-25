@@ -147,6 +147,9 @@ UTF-8 编码，每行一个 JSON 对象，包含所有输入和输出字段。
 - `list_optimizers`: 列出可用优化器
 - `get_defaults`: 获取默认配置
 
+### 会话控制
+- `finish_session`: **重要** - 当所有脚本生成完毕后调用此工具，标记任务完成
+
 ## 工作流程
 
 1. **了解需求**：通过对话收集场景、字段、偏好等信息
@@ -155,6 +158,7 @@ UTF-8 编码，每行一个 JSON 对象，包含所有输入和输出字段。
 4. **生成脚本**：动态编写完整的 Python 脚本
 5. **写入文件**：使用 write_file 将脚本和文档保存到 generated/<session_id>/
 6. **展示结果**：告知用户文件位置和运行方法
+7. **完成会话**：调用 finish_session 工具，提供完成摘要和后续建议
 
 ## 输出目录结构
 
@@ -187,12 +191,20 @@ generated/<session_id>/
    - 不生成可能泄露 API 密钥的代码
    - 不访问用户未授权的文件
    - 不执行任何可能有害的操作
+
+5. **会话结束**：
+   - 完成所有文件生成后，必须调用 `finish_session` 工具
+   - 在 summary 中说明生成了哪些文件及其位置
+   - 在 next_steps 中提供运行脚本的命令建议
 """
 
 # Scenario-specific hints (optional)
 SCENARIO_HINTS: dict[str, str] = {
     "summary": "摘要类任务通常使用 GEPA + quick 模式即可获得良好效果。重点关注信息保真度和简洁性。",
-    "retrieval": "检索类任务建议使用 MIPROv2，注意 search_size 对成本的影响。确保 metric 能准确衡量检索质量。",
+    "retrieval": (
+        "检索类任务建议使用 MIPROv2，注意 search_size 对成本的影响。"
+        "确保 metric 能准确衡量检索质量。"
+    ),
     "scoring": "评分类任务可用 MIPROv2 保持稳定性。考虑使用数值差距作为 metric。",
     "classification": "分类任务使用 GEPA 通常足够。确保类别定义清晰。",
     "qa": "问答任务推荐 MIPROv2。注意区分事实性问题和开放性问题。",

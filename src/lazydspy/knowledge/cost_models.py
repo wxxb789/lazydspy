@@ -63,7 +63,9 @@ def estimate_optimization_cost(
     mode_estimates = call_estimates.get(mode, call_estimates["quick"])
 
     # Calculate total calls
-    total_calls = mode_estimates["calls_per_example"] * dataset_size + mode_estimates["overhead_calls"]
+    calls_per_example = mode_estimates["calls_per_example"]
+    overhead = mode_estimates["overhead_calls"]
+    total_calls = calls_per_example * dataset_size + overhead
 
     # Calculate tokens
     total_input_tokens = total_calls * avg_input_tokens

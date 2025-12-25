@@ -7,6 +7,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+# Type alias for API message format
+# content can be str or list[dict] (for tool_use/tool_result)
+APIMessage = dict[str, Any]
+
 
 class Message(BaseModel):
     """A conversation message."""
@@ -83,7 +87,7 @@ class ConversationSession:
             "timestamp": datetime.now(UTC).isoformat(),
         })
 
-    def get_messages(self) -> list[dict[str, str]]:
+    def get_messages(self) -> list[APIMessage]:
         """Get messages in API format.
 
         Returns:
@@ -116,4 +120,4 @@ class ConversationSession:
         self.state.tool_results.clear()
 
 
-__all__ = ["Message", "SessionState", "ConversationSession"]
+__all__ = ["Message", "SessionState", "ConversationSession", "APIMessage"]

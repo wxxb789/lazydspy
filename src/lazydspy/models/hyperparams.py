@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 OptimizerChoice = Literal["gepa", "miprov2"]
 RunMode = Literal["quick", "full"]
@@ -81,7 +81,9 @@ class OptimizationResultSummary(BaseModel):
     run_mode: RunMode = Field(..., description="运行模式")
     steps_completed: int = Field(..., ge=0, description="完成的步骤数")
     best_score: float | None = Field(default=None, ge=0.0, le=1.0, description="最优得分（0-1）")
-    checkpoint_state: CheckpointState | None = Field(default=None, description="最新 checkpoint 状态")
+    checkpoint_state: CheckpointState | None = Field(
+        default=None, description="最新 checkpoint 状态"
+    )
 
 
 __all__ = [

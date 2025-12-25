@@ -73,7 +73,11 @@ def chat(
     config = AgentConfig(
         model=model or os.getenv("ANTHROPIC_MODEL", "claude-opus-4.5"),
         base_url=base_url,
-        auth_token=auth_token or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY"),
+        auth_token=(
+            auth_token
+            or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            or os.getenv("ANTHROPIC_API_KEY")
+        ),
         debug=debug,
     )
 

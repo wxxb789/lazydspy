@@ -2,17 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, TypedDict
 
 from .data_ops import DATA_OPS_TOOLS
 from .domain_ops import DOMAIN_OPS_TOOLS
 from .file_ops import FILE_OPS_TOOLS
+from .session_ops import SESSION_OPS_TOOLS, SessionComplete
+
+# Type definitions
+ToolHandler = Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
+
+
+class ToolDefinition(TypedDict):
+    """Type definition for a tool."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    handler: ToolHandler
+
 
 # All available tools
-ALL_TOOLS = FILE_OPS_TOOLS + DATA_OPS_TOOLS + DOMAIN_OPS_TOOLS
+ALL_TOOLS: list[ToolDefinition] = (
+    FILE_OPS_TOOLS + DATA_OPS_TOOLS + DOMAIN_OPS_TOOLS + SESSION_OPS_TOOLS  # type: ignore[assignment]
+)
 
 # Tool name to handler mapping
-TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]] = {
+TOOL_HANDLERS: dict[str, ToolHandler] = {
     tool["name"]: tool["handler"] for tool in ALL_TOOLS
 }
 
@@ -27,7 +43,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
-def get_tool_handler(name: str) -> Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]] | None:
+def get_tool_handler(name: str) -> ToolHandler | None:
     """Get the handler function for a tool by name."""
     return TOOL_HANDLERS.get(name)
 
@@ -59,4 +75,6 @@ __all__ = [
     "FILE_OPS_TOOLS",
     "DATA_OPS_TOOLS",
     "DOMAIN_OPS_TOOLS",
+    "SESSION_OPS_TOOLS",
+    "SessionComplete",
 ]

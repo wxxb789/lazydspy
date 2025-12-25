@@ -9,8 +9,6 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .hyperparams import (
-    GEPA_PRESETS,
-    MIPROV2_PRESETS,
     CheckpointSettings,
     GEPAHyperparameters,
     MIPROv2Hyperparameters,
@@ -166,6 +164,7 @@ class GenerationConfig(BaseModel):
         normalized_algo = self.algorithm.lower().replace("-", "").replace("_", "")
         run_mode = cast(RunMode, self.mode)
 
+        new_hyper: GEPAHyperparameters | MIPROv2Hyperparameters
         if normalized_algo == "gepa":
             new_hyper = GEPAHyperparameters.from_mode(run_mode, overrides)
         else:

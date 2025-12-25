@@ -122,7 +122,7 @@ async def check_schema(args: dict[str, Any]) -> dict[str, Any]:
         extra = [f for f in data if f not in expected_fields]
         present = [f for f in expected_fields if f in data]
 
-        result_lines = [f"检查结果:"]
+        result_lines = ["检查结果:"]
         result_lines.append(f"- 期望字段: {expected_fields}")
         result_lines.append(f"- 已有字段: {present}")
 
@@ -177,10 +177,10 @@ async def sample_data(args: dict[str, Any]) -> dict[str, Any]:
         input_fields = args["input_fields"]
         output_fields = args["output_fields"]
         num_samples = args.get("num_samples", 2)
-        scenario = args.get("scenario", "")
+        # scenario is reserved for future AI-generated sample content
+        _ = args.get("scenario", "")
 
         samples = []
-        all_fields = input_fields + output_fields
 
         for i in range(1, num_samples + 1):
             row: dict[str, str] = {}

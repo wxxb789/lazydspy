@@ -7,7 +7,6 @@ from typing import Any
 
 from lazydspy.knowledge.cost_models import estimate_optimization_cost
 from lazydspy.knowledge.optimizers import (
-    OPTIMIZER_REGISTRY,
     get_optimizer_info,
     list_all_optimizers,
 )

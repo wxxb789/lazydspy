@@ -392,3 +392,48 @@ def test_get_defaults_tool() -> None:
     text = result["content"][0]["text"]
     assert "breadth" in text
     assert "depth" in text
+
+
+def test_finish_session_tool() -> None:
+    """finish_session 工具应抛出 SessionComplete 异常。"""
+    from lazydspy.tools.session_ops import SessionComplete, finish_session
+
+    with pytest.raises(SessionComplete) as exc_info:
+        run_async(finish_session({
+            "summary": "测试完成",
+            "next_steps": ["步骤1", "步骤2"],
+        }))
+
+    assert exc_info.value.summary == "测试完成"
+    assert exc_info.value.next_steps == ["步骤1", "步骤2"]
+
+
+def test_finish_session_default_summary() -> None:
+    """finish_session 应有默认的摘要。"""
+    from lazydspy.tools.session_ops import SessionComplete, finish_session
+
+    with pytest.raises(SessionComplete) as exc_info:
+        run_async(finish_session({}))
+
+    assert exc_info.value.summary == "任务已完成"
+    assert exc_info.value.next_steps == []
+
+
+def test_session_complete_exception() -> None:
+    """SessionComplete 异常应正确携带数据。"""
+    from lazydspy.tools.session_ops import SessionComplete
+
+    exc = SessionComplete(summary="完成摘要", next_steps=["a", "b"])
+
+    assert exc.summary == "完成摘要"
+    assert exc.next_steps == ["a", "b"]
+    assert str(exc) == "完成摘要"
+
+
+def test_session_complete_default_next_steps() -> None:
+    """SessionComplete 的 next_steps 应默认为空列表。"""
+    from lazydspy.tools.session_ops import SessionComplete
+
+    exc = SessionComplete(summary="测试")
+
+    assert exc.next_steps == []

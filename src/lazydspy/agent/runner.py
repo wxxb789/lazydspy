@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncGenerator
+from typing import Any
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.markdown import Markdown
+from rich.panel import Panel
+
+from lazydspy.tools import SessionComplete, get_all_tool_schemas, get_tool_handler
 
 from .config import AgentConfig
 from .prompts import SYSTEM_PROMPT
-from .session import ConversationSession
-from lazydspy.tools import get_tool_handler, get_all_tool_schemas
+from .session import APIMessage, ConversationSession
 
 
 class AgentRunner:
@@ -34,24 +35,28 @@ class AgentRunner:
         self.config = config or AgentConfig.from_env()
         self.session = ConversationSession()
         self._client: Any = None
+        # Session completion state
+        self._session_complete = False
+        self._completion_summary = ""
+        self._completion_next_steps: list[str] = []
 
     def _get_client(self) -> Any:
-        """Get or create the Anthropic client."""
+        """Get or create the Anthropic async client."""
         if self._client is None:
             try:
                 import anthropic
-                self._client = anthropic.Anthropic(
+                self._client = anthropic.AsyncAnthropic(
                     api_key=self.config.auth_token,
                     base_url=self.config.base_url,
                 )
-            except ImportError:
+            except ImportError as err:
                 raise RuntimeError(
                     "anthropic package not installed. "
                     "Install with: pip install anthropic"
-                )
+                ) from err
         return self._client
 
-    async def _call_claude(self, messages: list[dict[str, str]]) -> Any:
+    async def _call_claude(self, messages: list[APIMessage]) -> Any:
         """Call Claude API with messages and tools.
 
         Args:
@@ -65,8 +70,8 @@ class AgentRunner:
         # Get tool schemas
         tools = get_all_tool_schemas()
 
-        # Make API call
-        response = client.messages.create(
+        # Make async API call
+        response = await client.messages.create(
             model=self.config.model,
             max_tokens=8192,
             system=SYSTEM_PROMPT,
@@ -76,7 +81,9 @@ class AgentRunner:
 
         return response
 
-    async def _execute_tool(self, tool_name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
+    async def _execute_tool(
+        self, tool_name: str, tool_input: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
         """Execute a tool and return the result.
 
         Args:
@@ -84,7 +91,7 @@ class AgentRunner:
             tool_input: Tool input arguments
 
         Returns:
-            Tool execution result
+            Tuple of (tool result, session_complete flag)
         """
         handler = get_tool_handler(tool_name)
         if handler is None:
@@ -93,19 +100,30 @@ class AgentRunner:
                     "type": "text",
                     "text": f"未知工具: {tool_name}",
                 }]
-            }
+            }, False
 
         try:
             result = await handler(tool_input)
             self.session.add_tool_result(tool_name, result)
-            return result
+            return result, False
+        except SessionComplete as e:
+            # Session completion signal
+            self._session_complete = True
+            self._completion_summary = e.summary
+            self._completion_next_steps = e.next_steps
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"会话完成: {e.summary}",
+                }]
+            }, True
         except Exception as e:
             return {
                 "content": [{
                     "type": "text",
                     "text": f"工具执行失败: {e}",
                 }]
-            }
+            }, False
 
     async def _process_response(self, response: Any) -> tuple[str | None, bool]:
         """Process a Claude response, executing tools if needed.
@@ -143,15 +161,21 @@ class AgentRunner:
         # Execute tools if any
         if tool_use_blocks:
             tool_results = []
+            session_complete = False
+
             for tool_block in tool_use_blocks:
                 tool_name = tool_block["name"]
                 tool_input = tool_block["input"]
 
                 self.console.print(f"[cyan]⚡ 执行工具: {tool_name}[/]")
                 if self.config.debug:
-                    self.console.print(f"[dim]   输入: {json.dumps(tool_input, ensure_ascii=False)}[/]")
+                    input_str = json.dumps(tool_input, ensure_ascii=False)
+                    self.console.print(f"[dim]   输入: {input_str}[/]")
 
-                result = await self._execute_tool(tool_name, tool_input)
+                result, is_complete = await self._execute_tool(tool_name, tool_input)
+
+                if is_complete:
+                    session_complete = True
 
                 # Extract text from result
                 result_text = ""
@@ -163,7 +187,10 @@ class AgentRunner:
 
                 if result_text:
                     # Show abbreviated result
-                    display_text = result_text[:200] + "..." if len(result_text) > 200 else result_text
+                    if len(result_text) > 200:
+                        display_text = result_text[:200] + "..."
+                    else:
+                        display_text = result_text
                     self.console.print(f"[green]   ✓ {display_text}[/]")
 
                 tool_results.append({
@@ -171,6 +198,10 @@ class AgentRunner:
                     "tool_use_id": tool_block["id"],
                     "content": result_text,
                 })
+
+            # If session is complete, return immediately
+            if session_complete:
+                return "\n".join(assistant_text) if assistant_text else None, False
 
             # Continue conversation with tool results
             messages = self.session.get_messages()
@@ -199,6 +230,11 @@ class AgentRunner:
 
     async def run_conversation(self) -> None:
         """Run the interactive conversation loop."""
+        # Reset session completion state
+        self._session_complete = False
+        self._completion_summary = ""
+        self._completion_next_steps = []
+
         self.console.print(Panel(
             "[bold]欢迎使用 lazydspy![/bold]\n\n"
             "我将帮助你生成一个 DSPy 优化脚本。\n"
@@ -238,6 +274,11 @@ class AgentRunner:
                 # Process response
                 _, _ = await self._process_response(response)
 
+                # Check if session completed after processing
+                if self._session_complete:
+                    self._show_completion_summary()
+                    self._session_complete = False  # Allow new tasks
+
                 turn_count += 1
 
             except KeyboardInterrupt:
@@ -251,6 +292,19 @@ class AgentRunner:
 
         if turn_count >= self.config.max_turns:
             self.console.print("[yellow]⚠️ 达到最大对话轮数限制[/]")
+
+    def _show_completion_summary(self) -> None:
+        """Display completion summary to user."""
+        lines = ["[bold green]任务完成！[/]", "", self._completion_summary]
+
+        if self._completion_next_steps:
+            lines.extend(["", "[bold]下一步建议：[/]"])
+            for step in self._completion_next_steps:
+                lines.append(f"  • {step}")
+
+        lines.extend(["", "[dim]您可以继续提出新需求，或输入 'exit' 退出。[/]"])
+
+        self.console.print(Panel("\n".join(lines), title="✅ 任务完成", border_style="green"))
 
     def _show_help(self) -> None:
         """Show help information."""

@@ -37,7 +37,10 @@ OPTIMIZER_REGISTRY: dict[str, OptimizerInfo] = {
     ),
     "miprov2": OptimizerInfo(
         name="MIPROv2",
-        description="Model-based Instruction Prompt Refinement Optimizer v2 - 适合复杂任务，成本较高",
+        description=(
+            "Model-based Instruction Prompt Refinement Optimizer v2 - "
+            "适合复杂任务，成本较高"
+        ),
         recommended_for=["retrieval", "scoring", "qa", "reasoning"],
         cost_level="medium",
         hyperparameters={
