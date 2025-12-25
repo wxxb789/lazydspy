@@ -198,6 +198,39 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+def _detect_scenario_type(scenario: str) -> str:
+    lowered = scenario.lower()
+    if any(keyword in lowered for keyword in ("摘要", "summary", "summarize", "总结")):
+        return "summary"
+    if any(keyword in lowered for keyword in ("检索", "retrieval", "search", "问答", "qa")):
+        return "retrieval"
+    if any(keyword in lowered for keyword in ("评分", "打分", "score", "judge", "评级")):
+        return "scoring"
+    return "general"
+
+
+def _recommend_strategy(config: GenerationConfig) -> tuple[str, str, Dict[str, Any], str]:
+    scenario_type = _detect_scenario_type(config.scenario)
+    recommended_mode = "quick"
+    if scenario_type == "retrieval":
+        algorithm = "MIPROv2"
+        hyper = dict(MIPROV2_PRESETS[recommended_mode])
+        cost_hint = "检索类任务优先用 quick + MIPROv2（search_size 较小），full 搜索会放大上下文成本。"
+    elif scenario_type == "summary":
+        algorithm = "GEPA"
+        hyper = dict(GEPA_PRESETS[recommended_mode])
+        cost_hint = "摘要类建议轻量 GEPA，快速收敛，必要时再切换 full 模式提升质量但成本更高。"
+    elif scenario_type == "scoring":
+        algorithm = "MIPROv2"
+        hyper = dict(MIPROV2_PRESETS[recommended_mode])
+        cost_hint = "评分/判别可用 quick + MIPROv2 保持稳定，full 模式会增加搜索轮次与 token 开销。"
+    else:
+        algorithm = "GEPA"
+        hyper = dict(GEPA_PRESETS[recommended_mode])
+        cost_hint = "通用场景默认走 quick + GEPA，先低成本验证，再按需提升容量。"
+    return scenario_type, algorithm, hyper, cost_hint
+
+
 class AgentSession:
     """Lightweight wrapper to orchestrate asking, confirming, and summarizing."""
 
@@ -396,12 +429,21 @@ def _ask_user(session: AgentSession, question: Question) -> Any:
     return question.post_process(answer) if question.post_process else answer
 
 
-def _summarize_config(config: GenerationConfig) -> None:
+def _summarize_config(
+    config: GenerationConfig,
+    recommendation: tuple[str, str, Dict[str, Any], str] | None = None,
+) -> None:
     table = Table(title="GenerationConfig 摘要", expand=False, show_lines=True)
     table.add_column("字段")
     table.add_column("值")
     table.add_row("Session", config.session_id)
     table.add_row("场景", config.scenario)
+    if recommendation:
+        scenario_type, algo, hyper, cost_hint = recommendation
+        table.add_row("场景类型", scenario_type)
+        table.add_row("推荐算法", f"{algo}（quick 轻量，可覆盖）")
+        table.add_row("推荐超参", json.dumps(hyper, ensure_ascii=False))
+        table.add_row("成本提示", cost_hint)
     table.add_row("输入字段", ", ".join(config.input_fields))
     table.add_row("输出字段", ", ".join(config.output_fields))
     table.add_row("模型偏好", config.model_preference)
@@ -443,6 +485,8 @@ class RenderResult:
 
 
 def _render_files(config: GenerationConfig) -> RenderResult:
+    scenario_type, recommended_algo, recommended_hyper, cost_hint = _recommend_strategy(config)
+
     base_dir = Path("generated") / config.session_id
     base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -466,8 +510,10 @@ def _render_files(config: GenerationConfig) -> RenderResult:
         "python": python_requirement,
         "dependencies": script_dependencies,
         "scenario": config.scenario,
+        "scenario_type": scenario_type,
         "generated_at": datetime.utcnow().isoformat(),
         "generator": "lazydspy CLI",
+        "cost_hint": cost_hint,
     }
 
     model_dump = getattr(config, "model_dump", None)
@@ -481,6 +527,12 @@ def _render_files(config: GenerationConfig) -> RenderResult:
     generation_payload["hyperparameter_defaults"] = {
         "gepa": GEPA_PRESETS,
         "miprov2": MIPROV2_PRESETS,
+    }
+    generation_payload["recommended"] = {
+        "algorithm": recommended_algo,
+        "hyperparameters": recommended_hyper,
+        "scenario_type": scenario_type,
+        "cost_hint": cost_hint,
     }
     generation_payload["session_token"] = uuid4().hex
     generation_payload["metadata"] = metadata
@@ -516,7 +568,7 @@ def _render_files(config: GenerationConfig) -> RenderResult:
             import math
             from datetime import datetime
             from pathlib import Path
-            from typing import Any, Callable, Dict, Iterable, List, Literal, Sequence
+            from typing import Any, Callable, Dict, Iterable, List, Literal, Sequence, Set
 
             import dspy
             import typer
@@ -527,6 +579,12 @@ def _render_files(config: GenerationConfig) -> RenderResult:
 
             METADATA: Dict[str, Any] = $metadata_json
             GENERATION_CONFIG: Dict[str, Any] = $generation_json
+            SCENARIO_TYPE: str = GENERATION_CONFIG.get("recommended", {}).get(
+                "scenario_type", GENERATION_CONFIG.get("metadata", {}).get("scenario_type", "general")
+            )
+            COST_HINT: str = GENERATION_CONFIG.get("recommended", {}).get(
+                "cost_hint", GENERATION_CONFIG.get("metadata", {}).get("cost_hint", "")
+            )
             HYPERPARAMETER_DEFAULTS: Dict[str, Dict[str, Dict[str, Any]]] = GENERATION_CONFIG.get(
                 "hyperparameter_defaults",
                 {
@@ -604,8 +662,17 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                 return prompt_model, teacher_model
 
 
+            def _normalize_text(text: Any) -> str:
+                return str(text or "").strip().lower()
+
+
+            def _tokenize(text: Any) -> Set[str]:
+                return set(_normalize_text(text).split())
+
+
             def _build_metric(
                 output_fields: Sequence[str],
+                scenario_type: str,
             ) -> Callable[[Any, Any, Any | None], float]:
                 target_field = output_fields[0] if output_fields else None
 
@@ -620,7 +687,29 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                         actual = pred.get(target_field)
                     if expected is None or actual is None:
                         return 0.0
-                    return 1.0 if str(expected).strip() == str(actual).strip() else 0.0
+
+                    normalized_expected = _normalize_text(expected)
+                    normalized_actual = _normalize_text(actual)
+                    if scenario_type == "summary":
+                        expected_tokens = _tokenize(normalized_expected)
+                        actual_tokens = _tokenize(normalized_actual)
+                        overlap = len(expected_tokens & actual_tokens)
+                        return overlap / max(1, len(expected_tokens))
+                    if scenario_type == "retrieval":
+                        if normalized_expected and normalized_expected in normalized_actual:
+                            return 1.0
+                        expected_tokens = _tokenize(normalized_expected)
+                        actual_tokens = _tokenize(normalized_actual)
+                        return len(expected_tokens & actual_tokens) / max(1, len(expected_tokens))
+                    if scenario_type == "scoring":
+                        try:
+                            expected_score = float(normalized_expected)
+                            actual_score = float(normalized_actual)
+                        except ValueError:
+                            return 0.0
+                        gap = abs(expected_score - actual_score)
+                        return max(0.0, 1.0 - gap / max(1.0, abs(expected_score)))
+                    return 1.0 if normalized_expected == normalized_actual else 0.0
 
                 return _metric
 
@@ -696,12 +785,21 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                 return json.loads(latest.read_text(encoding="utf-8"))
 
 
-            def _resolve_prompt(config: Dict[str, Any], checkpoint: Dict[str, Any] | None) -> str:
+            def _resolve_prompt(
+                config: Dict[str, Any], checkpoint: Dict[str, Any] | None, scenario_type: str
+            ) -> str:
                 if checkpoint:
                     for key in ("seed_prompt", "prompt"):
                         if checkpoint.get(key):
                             return str(checkpoint[key])
-                seed = config.get("seed_prompt") or "<<your prompt>>"
+                seed = config.get("seed_prompt")
+                if not seed:
+                    seed_templates = {
+                        "summary": "请根据提供的输入生成简短摘要，突出关键信息，保持事实一致。",
+                        "retrieval": "你是检索问答助手，根据给定上下文回答问题，避免臆造。",
+                        "scoring": "作为评估员，请对候选回答进行打分并返回数值或评级，附简短原因。",
+                    }
+                    seed = seed_templates.get(scenario_type, "<<your prompt>>")
                 scenario = config.get("scenario", "DSPy pipeline")
                 return f"{seed}\\n[场景] {scenario}"
 
@@ -752,6 +850,9 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                     console.print("[red]input_fields 不能为空[/]")
                     raise typer.Exit(code=1)
 
+                if COST_HINT:
+                    console.print(f"[yellow]{COST_HINT}[/]")
+
                 data_path = Path(runtime.get("data_path") or "data.jsonl")
                 dev_path = data_path.with_name(data_path.stem + ".dev.jsonl")
 
@@ -771,7 +872,7 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                     train_examples = train_examples[:effective_subset]
                     dev_examples = dev_examples[: max(1, min(len(dev_examples), effective_subset))]
 
-                metric = _build_metric(output_fields)
+                metric = _build_metric(output_fields, SCENARIO_TYPE)
                 hyper_overrides = runtime.get("hyperparameters_resolved") or runtime.get(
                     "hyperparameters", {}
                 )
@@ -786,7 +887,7 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                 )
 
                 resume_state = _load_latest_checkpoint(checkpoint_dir) if resume else None
-                seed_prompt = _resolve_prompt(runtime, resume_state)
+                seed_prompt = _resolve_prompt(runtime, resume_state, SCENARIO_TYPE)
                 start_step = int(resume_state["step"]) + 1 if resume_state else 1
                 if resume_state:
                     recovered_score = resume_state.get("best_score")
@@ -874,6 +975,8 @@ def _render_files(config: GenerationConfig) -> RenderResult:
         - 模式: {config.mode}
         - 模型偏好: {config.model_preference}
         - 算法: {config.algorithm}
+        - 推荐（轻量）: {recommended_algo} / {json.dumps(recommended_hyper, ensure_ascii=False)}
+        - 成本提示: {cost_hint}
         - 需要 checkpoint: {"是" if config.checkpoint_needed else "否"}
         - Checkpoint 间隔: {config.checkpoint_interval}, 上限: {config.max_checkpoints}
 
@@ -946,7 +1049,11 @@ def _render_files(config: GenerationConfig) -> RenderResult:
             encoding="utf-8",
         )
 
-    data_guide_highlights = expectations + ["数据指引路径：" + str(data_guide_path)]
+    data_guide_highlights = expectations + [
+        f"推荐（轻量）：{recommended_algo} / {json.dumps(recommended_hyper, ensure_ascii=False)}",
+        f"成本提示：{cost_hint}",
+        "数据指引路径：" + str(data_guide_path),
+    ]
 
     return RenderResult(
         script_path=script_path,
@@ -998,9 +1105,17 @@ def run_chat() -> None:
             console.print(f"[red]- {loc}: {msg}[/]")
         return
 
-    _summarize_config(config)
-    summary = session.summarize(answers)
+    recommendation = _recommend_strategy(config)
+    _summarize_config(config, recommendation=recommendation)
+    summary = session.summarize(
+        {
+            **answers,
+            "recommended_algorithm": recommendation[1],
+            "recommended_hyperparameters": recommendation[2],
+        }
+    )
     console.print(Panel(summary, title="AI 总结", expand=False))
+    console.print(Panel(recommendation[3], title="成本提示（轻量起步，可覆盖）", expand=False))
     confirm_prompt = session.confirm(summary)
     console.print(Panel(confirm_prompt, title="确认", expand=False))
     confirm = input("> ").strip().lower()
