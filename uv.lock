@@ -1011,7 +1011,7 @@ dependencies = [
     { name = "typer" },
 ]
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 dev = [
     { name = "mypy" },
     { name = "pytest" },
@@ -1022,19 +1022,16 @@ dev = [
 requires-dist = [
     { name = "claude-agent-sdk", specifier = "==0.1.17" },
     { name = "dspy" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
     { name = "python-dotenv" },
     { name = "rich" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "typer", specifier = ">=0.12" },
 ]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
+provides-extras = ["dev"]
 
 [[package]]
 name = "librt"

@@ -1278,6 +1278,16 @@ def run_chat(
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = list(argv) if argv is not None else None
+    if not args:
+        _invoke_chat_entrypoint(
+            model=None,
+            base_url=None,
+            auth_token=None,
+            agent_config=None,
+            agent_env=None,
+            deny_permission=None,
+        )
+        return
     try:
         app(args=args, standalone_mode=False)
     except typer.Exit as exc:  # pragma: no cover - passthrough for Typer exit handling
@@ -1371,6 +1381,24 @@ app = typer.Typer(
     ),
 )
 
+def _invoke_chat_entrypoint(
+    *,
+    model: str | None,
+    base_url: str | None,
+    auth_token: str | None,
+    agent_config: Path | None,
+    agent_env: List[str] | None,
+    deny_permission: List[str] | None,
+) -> None:
+    _invoke_chat_command(
+        model=model,
+        base_url=base_url,
+        auth_token=auth_token,
+        agent_config=agent_config,
+        agent_env=agent_env,
+        deny_permission=deny_permission,
+    )
+
 
 MODEL_OPTION = typer.Option(
     None,
@@ -1428,9 +1456,8 @@ def _invoke_chat_command(
     )
 
 
-@app.callback(invoke_without_command=True)
 def _entrypoint(
-    ctx: typer.Context,
+    ctx: typer.Context | None = None,
     model: str | None = MODEL_OPTION,
     base_url: str | None = BASE_URL_OPTION,
     auth_token: str | None = AUTH_TOKEN_OPTION,
@@ -1438,15 +1465,20 @@ def _entrypoint(
     agent_env: List[str] | None = AGENT_ENV_OPTION,
     deny_permission: List[str] | None = DENY_PERMISSION_OPTION,
 ) -> None:
-    if ctx.invoked_subcommand is None:
-        _invoke_chat_command(
-            model=model,
-            base_url=base_url,
-            auth_token=auth_token,
-            agent_config=agent_config,
-            agent_env=agent_env,
-            deny_permission=deny_permission,
-        )
+    if ctx is not None and getattr(ctx, "invoked_subcommand", None) is not None:
+        return
+    _invoke_chat_entrypoint(
+        model=model,
+        base_url=base_url,
+        auth_token=auth_token,
+        agent_config=agent_config,
+        agent_env=agent_env,
+        deny_permission=deny_permission,
+    )
+
+
+if hasattr(app, "callback"):
+    app.callback(invoke_without_command=True)(_entrypoint)
 
 
 @app.command(name="chat", help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
