@@ -27,7 +27,7 @@ packages = ["src/lazydspy"]
 [tool.hatch.build.targets.sdist]
 include = ["src"]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "mypy>=1.11",
     "pytest>=8.3",
