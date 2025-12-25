@@ -27,8 +27,8 @@ packages = ["src/lazydspy"]
 [tool.hatch.build.targets.sdist]
 include = ["src"]
 
-[tool.uv]
-dev-dependencies = [
+[tool.uv.dependency-groups]
+dev = [
     "mypy",
     "pytest",
     "ruff",
