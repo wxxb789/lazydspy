@@ -32,6 +32,41 @@
   uv run generated/<session_id>/pipeline.py --mode full --checkpoint-dir checkpoints --resume
   ```
 
+## Custom Claude endpoint
+`lazydspy` reads Claude Agent SDK settings from environment variables or CLI flags when starting the `chat` command. For a local Claude Code proxy (or other self-hosted endpoint), set:
+
+```bash
+# .env or shell
+ANTHROPIC_BASE_URL=http://localhost:8030
+ANTHROPIC_AUTH_TOKEN=dev-local-token
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+
+# Or via CLI
+uv run lazydspy chat --base-url http://localhost:8030 --auth-token dev-local-token --model claude-3-5-sonnet-20241022
+```
+
+The endpoint must expose a Claude-compatible `/v1/messages` interface. Some proxies may not fully support streaming or advanced tool-calling; if initialization fails, `lazydspy` will fall back to local prompts with a warning.
+
+- To layer on additional Claude Code controls (permissions + env), provide a JSON profile via `--agent-config`:
+  ```json
+  {
+    "env": {
+      "ANTHROPIC_BASE_URL": "http://localhost:4141",
+      "ANTHROPIC_AUTH_TOKEN": "dummy",
+      "ANTHROPIC_MODEL": "claude-opus-4.5",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4.5",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
+      "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+    },
+    "permissions": {
+      "deny": ["WebSearch"]
+    }
+  }
+  ```
+  Pass it to the CLI: `uv run lazydspy chat --agent-config ./agent.json --model claude-opus-4.5`.
+  A starter `agent.json` with the above structure lives at the repo root—copy or modify it to suit your proxy settings.
+
 ## Checks
 Run from repo root (recommended order):
 1. `uv run ruff check .`

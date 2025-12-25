@@ -46,6 +46,12 @@ def _install_claude_agent_sdk_stub() -> None:
 
     class _Session:
         def __init__(self, *args, **kwargs):
+            self.system_prompt = kwargs.get("system_prompt")
+            self.model = kwargs.get("model")
+            self.base_url = kwargs.get("base_url")
+            self.api_key = kwargs.get("api_key") or kwargs.get("auth_token")
+            self.env = kwargs.get("env") or {}
+            self.disallowed_tools = kwargs.get("disallowed_tools") or kwargs.get("denied_tools")
             self.messages = types.SimpleNamespace(create=lambda **_kwargs: None)
 
     claude_agent_sdk = types.ModuleType("claude_agent_sdk")
