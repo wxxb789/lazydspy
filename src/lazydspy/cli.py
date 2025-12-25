@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from string import Template
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, cast
+from typing import Annotated, Any, Callable, Dict, Iterable, List, Mapping, Sequence, cast
 from uuid import uuid4
 
 import typer
@@ -30,6 +30,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FieldValidationInfo,
     ValidationError,
     field_validator,
     model_validator,
@@ -148,9 +149,17 @@ class GenerationConfig(BaseModel):
             raise ValueError("subset_size must be positive")
         return parsed
 
-    @field_validator("checkpoint_interval", "max_checkpoints")
+    @field_validator("checkpoint_interval", "max_checkpoints", mode="before")
     @classmethod
-    def ensure_positive(cls, value: Any) -> int:
+    def normalize_checkpoint_numbers(cls, value: Any, info: FieldValidationInfo) -> int:
+        if value is None:
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return 1 if info.field_name == "checkpoint_interval" else 20
+            value = stripped
+
         try:
             parsed = int(value)
         except (TypeError, ValueError) as exc:
@@ -255,6 +264,7 @@ class AgentSession:
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self._console = console
         self._session: Any | None = None
+        self._session_failed = False
         self._model = model or self.DEFAULT_MODEL
         self._base_url = base_url
         self._auth_token = auth_token
@@ -297,11 +307,14 @@ class AgentSession:
     def _ensure_session(self) -> Any | None:
         if self._session is not None:
             return self._session
+        if self._session_failed:
+            return None
         try:
             self._session = self._build_sdk_session()
         except Exception as exc:  # noqa: BLE001
             self._console.print(f"[yellow]无法初始化 Claude 客户端，将使用内置提示：{exc}[/]")
             self._session = None
+            self._session_failed = True
         return self._session
 
     def _invoke_session(self, session: Any, user_content: str) -> Any:
@@ -1311,7 +1324,9 @@ def _build_agent_session(
         )
 
     resolved_base_url = (
-        user_base_url or _normalize(merged_env.get("ANTHROPIC_BASE_URL")) or _normalize(os.getenv("ANTHROPIC_BASE_URL"))
+        user_base_url
+        or _normalize(merged_env.get("ANTHROPIC_BASE_URL"))
+        or _normalize(os.getenv("ANTHROPIC_BASE_URL"))
     )
     resolved_auth_token = (
         _normalize(auth_token)
@@ -1353,43 +1368,69 @@ app = typer.Typer(
 )
 
 
-@app.command(help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
-def chat(
-    model: str = typer.Option(
+ModelOption = Annotated[
+    str | None,
+    typer.Option(
         None,
         "--model",
         "-m",
         envvar="ANTHROPIC_MODEL",
         help="自定义 Claude 模型名称（默认 claude-3-5-sonnet-20241022）。",
     ),
-    base_url: str = typer.Option(
+]
+BaseUrlOption = Annotated[
+    str | None,
+    typer.Option(
         None,
         "--base-url",
         envvar="ANTHROPIC_BASE_URL",
         help="自定义 Claude Endpoint，例如本地代理。",
     ),
-    auth_token: str = typer.Option(
+]
+AuthTokenOption = Annotated[
+    str | None,
+    typer.Option(
         None,
         "--auth-token",
         envvar=["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
         help="Claude API Token，支持本地代理或官方 Key。",
     ),
-    agent_config: Path | None = typer.Option(
+]
+AgentConfigOption = Annotated[
+    Path | None,
+    typer.Option(
         None,
         "--agent-config",
         help="读取包含 env/permissions 字段的 JSON 配置文件，用于 Claude Agent SDK。",
     ),
-    agent_env: List[str] | None = typer.Option(
+]
+AgentEnvOption = Annotated[
+    List[str] | None,
+    typer.Option(
         None,
         "--agent-env",
         "-E",
         help="以 KEY=VALUE 形式追加 Claude Agent SDK 环境变量，可重复传入。",
     ),
-    deny_permission: List[str] | None = typer.Option(
+]
+DenyPermissionOption = Annotated[
+    List[str] | None,
+    typer.Option(
         None,
         "--deny-permission",
         help="显式禁用的工具/权限名称，可重复传入；与 agent 配置文件合并。",
     ),
+]
+
+
+def _invoke_chat_command(
+    *,
+    model: str | None,
+    base_url: str | None,
+    auth_token: str | None,
+    agent_config: Path | None,
+    agent_env: List[str] | None,
+    deny_permission: List[str] | None,
 ) -> None:
     run_chat(
         model=model,
@@ -1398,6 +1439,46 @@ def chat(
         agent_config=agent_config,
         agent_env=_parse_agent_env_pairs(agent_env or []),
         deny_permissions=deny_permission or [],
+    )
+
+
+@app.callback(invoke_without_command=True)
+def _entrypoint(
+    ctx: typer.Context,
+    model: ModelOption = None,
+    base_url: BaseUrlOption = None,
+    auth_token: AuthTokenOption = None,
+    agent_config: AgentConfigOption = None,
+    agent_env: AgentEnvOption = None,
+    deny_permission: DenyPermissionOption = None,
+) -> None:
+    if ctx.invoked_subcommand is None:
+        _invoke_chat_command(
+            model=model,
+            base_url=base_url,
+            auth_token=auth_token,
+            agent_config=agent_config,
+            agent_env=agent_env,
+            deny_permission=deny_permission,
+        )
+
+
+@app.command(name="chat", help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
+def chat(
+    model: ModelOption = None,
+    base_url: BaseUrlOption = None,
+    auth_token: AuthTokenOption = None,
+    agent_config: AgentConfigOption = None,
+    agent_env: AgentEnvOption = None,
+    deny_permission: DenyPermissionOption = None,
+) -> None:
+    _invoke_chat_command(
+        model=model,
+        base_url=base_url,
+        auth_token=auth_token,
+        agent_config=agent_config,
+        agent_env=agent_env,
+        deny_permission=deny_permission,
     )
 
 
