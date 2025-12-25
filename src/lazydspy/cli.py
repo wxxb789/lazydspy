@@ -7,13 +7,17 @@ import os
 import subprocess
 import textwrap
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from string import Template
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, cast
 from uuid import uuid4
 
 import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
 from lazydspy.models import (
     GEPA_PRESETS,
     MIPROV2_PRESETS,
@@ -29,9 +33,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 
 console = Console()
 
@@ -41,7 +42,7 @@ class GenerationConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    session_id: str = Field(default_factory=lambda: datetime.utcnow().strftime("%Y%m%d-%H%M%S"))
+    session_id: str = Field(default_factory=lambda: datetime.now(UTC).strftime("%Y%m%d-%H%M%S"))
     scenario: str = Field(..., description="场景描述")
     input_fields: List[str] = Field(..., description="输入字段")
     output_fields: List[str] = Field(..., description="输出字段")
@@ -211,11 +212,14 @@ def _detect_scenario_type(scenario: str) -> str:
 
 def _recommend_strategy(config: GenerationConfig) -> tuple[str, str, Dict[str, Any], str]:
     scenario_type = _detect_scenario_type(config.scenario)
-    recommended_mode = "quick"
+    recommended_mode: RunMode = "quick"
     if scenario_type == "retrieval":
         algorithm = "MIPROv2"
         hyper = dict(MIPROV2_PRESETS[recommended_mode])
-        cost_hint = "检索类任务优先用 quick + MIPROv2（search_size 较小），full 搜索会放大上下文成本。"
+        cost_hint = (
+            "检索类任务优先用 quick + MIPROv2（search_size 较小），"
+            "full 搜索会放大上下文成本。"
+        )
     elif scenario_type == "summary":
         algorithm = "GEPA"
         hyper = dict(GEPA_PRESETS[recommended_mode])
@@ -511,7 +515,7 @@ def _render_files(config: GenerationConfig) -> RenderResult:
         "dependencies": script_dependencies,
         "scenario": config.scenario,
         "scenario_type": scenario_type,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "generator": "lazydspy CLI",
         "cost_hint": cost_hint,
     }
@@ -566,7 +570,7 @@ def _render_files(config: GenerationConfig) -> RenderResult:
 
             import json
             import math
-            from datetime import datetime
+            from datetime import UTC, datetime
             from pathlib import Path
             from typing import Any, Callable, Dict, Iterable, List, Literal, Sequence, Set
 
@@ -580,7 +584,8 @@ def _render_files(config: GenerationConfig) -> RenderResult:
             METADATA: Dict[str, Any] = $metadata_json
             GENERATION_CONFIG: Dict[str, Any] = $generation_json
             SCENARIO_TYPE: str = GENERATION_CONFIG.get("recommended", {}).get(
-                "scenario_type", GENERATION_CONFIG.get("metadata", {}).get("scenario_type", "general")
+                "scenario_type",
+                GENERATION_CONFIG.get("metadata", {}).get("scenario_type", "general"),
             )
             COST_HINT: str = GENERATION_CONFIG.get("recommended", {}).get(
                 "cost_hint", GENERATION_CONFIG.get("metadata", {}).get("cost_hint", "")
@@ -765,7 +770,7 @@ def _render_files(config: GenerationConfig) -> RenderResult:
                     "meta": getattr(program, "meta", {}),
                     "seed_prompt": seed_prompt,
                     "best_score": best_score,
-                    "saved_at": datetime.utcnow().isoformat(),
+                    "saved_at": datetime.now(UTC).isoformat(),
                 }
                 path = checkpoint_dir / f"checkpoint-{step:04d}.json"
                 path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
