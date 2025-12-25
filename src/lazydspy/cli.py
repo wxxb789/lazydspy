@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from string import Template
-from typing import Annotated, Any, Callable, Dict, Iterable, List, Mapping, Sequence, cast
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Protocol, Sequence, cast
 from uuid import uuid4
 
 import typer
@@ -30,13 +30,16 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    FieldValidationInfo,
     ValidationError,
     field_validator,
     model_validator,
 )
 
 console = Console()
+
+
+class _FieldNameInfo(Protocol):
+    field_name: str
 
 
 class GenerationConfig(BaseModel):
@@ -151,13 +154,14 @@ class GenerationConfig(BaseModel):
 
     @field_validator("checkpoint_interval", "max_checkpoints", mode="before")
     @classmethod
-    def normalize_checkpoint_numbers(cls, value: Any, info: FieldValidationInfo) -> int:
+    def normalize_checkpoint_numbers(cls, value: Any, info: _FieldNameInfo) -> int:
+        default = 1 if info.field_name == "checkpoint_interval" else 20
         if value is None:
-            return value
+            return default
         if isinstance(value, str):
             stripped = value.strip()
             if not stripped:
-                return 1 if info.field_name == "checkpoint_interval" else 20
+                return default
             value = stripped
 
         try:
@@ -1368,59 +1372,41 @@ app = typer.Typer(
 )
 
 
-ModelOption = Annotated[
-    str | None,
-    typer.Option(
-        None,
-        "--model",
-        "-m",
-        envvar="ANTHROPIC_MODEL",
-        help="自定义 Claude 模型名称（默认 claude-3-5-sonnet-20241022）。",
-    ),
-]
-BaseUrlOption = Annotated[
-    str | None,
-    typer.Option(
-        None,
-        "--base-url",
-        envvar="ANTHROPIC_BASE_URL",
-        help="自定义 Claude Endpoint，例如本地代理。",
-    ),
-]
-AuthTokenOption = Annotated[
-    str | None,
-    typer.Option(
-        None,
-        "--auth-token",
-        envvar=["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
-        help="Claude API Token，支持本地代理或官方 Key。",
-    ),
-]
-AgentConfigOption = Annotated[
-    Path | None,
-    typer.Option(
-        None,
-        "--agent-config",
-        help="读取包含 env/permissions 字段的 JSON 配置文件，用于 Claude Agent SDK。",
-    ),
-]
-AgentEnvOption = Annotated[
-    List[str] | None,
-    typer.Option(
-        None,
-        "--agent-env",
-        "-E",
-        help="以 KEY=VALUE 形式追加 Claude Agent SDK 环境变量，可重复传入。",
-    ),
-]
-DenyPermissionOption = Annotated[
-    List[str] | None,
-    typer.Option(
-        None,
-        "--deny-permission",
-        help="显式禁用的工具/权限名称，可重复传入；与 agent 配置文件合并。",
-    ),
-]
+MODEL_OPTION = typer.Option(
+    None,
+    "--model",
+    "-m",
+    envvar="ANTHROPIC_MODEL",
+    help="自定义 Claude 模型名称（默认 claude-3-5-sonnet-20241022）。",
+)
+BASE_URL_OPTION = typer.Option(
+    None,
+    "--base-url",
+    envvar="ANTHROPIC_BASE_URL",
+    help="自定义 Claude Endpoint，例如本地代理。",
+)
+AUTH_TOKEN_OPTION = typer.Option(
+    None,
+    "--auth-token",
+    envvar=["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    help="Claude API Token，支持本地代理或官方 Key。",
+)
+AGENT_CONFIG_OPTION = typer.Option(
+    None,
+    "--agent-config",
+    help="读取包含 env/permissions 字段的 JSON 配置文件，用于 Claude Agent SDK。",
+)
+AGENT_ENV_OPTION = typer.Option(
+    None,
+    "--agent-env",
+    "-E",
+    help="以 KEY=VALUE 形式追加 Claude Agent SDK 环境变量，可重复传入。",
+)
+DENY_PERMISSION_OPTION = typer.Option(
+    None,
+    "--deny-permission",
+    help="显式禁用的工具/权限名称，可重复传入；与 agent 配置文件合并。",
+)
 
 
 def _invoke_chat_command(
@@ -1445,12 +1431,12 @@ def _invoke_chat_command(
 @app.callback(invoke_without_command=True)
 def _entrypoint(
     ctx: typer.Context,
-    model: ModelOption = None,
-    base_url: BaseUrlOption = None,
-    auth_token: AuthTokenOption = None,
-    agent_config: AgentConfigOption = None,
-    agent_env: AgentEnvOption = None,
-    deny_permission: DenyPermissionOption = None,
+    model: str | None = MODEL_OPTION,
+    base_url: str | None = BASE_URL_OPTION,
+    auth_token: str | None = AUTH_TOKEN_OPTION,
+    agent_config: Path | None = AGENT_CONFIG_OPTION,
+    agent_env: List[str] | None = AGENT_ENV_OPTION,
+    deny_permission: List[str] | None = DENY_PERMISSION_OPTION,
 ) -> None:
     if ctx.invoked_subcommand is None:
         _invoke_chat_command(
@@ -1465,12 +1451,12 @@ def _entrypoint(
 
 @app.command(name="chat", help="使用 Claude Agent SDK 交互式收集 DSPy 配置。")
 def chat(
-    model: ModelOption = None,
-    base_url: BaseUrlOption = None,
-    auth_token: AuthTokenOption = None,
-    agent_config: AgentConfigOption = None,
-    agent_env: AgentEnvOption = None,
-    deny_permission: DenyPermissionOption = None,
+    model: str | None = MODEL_OPTION,
+    base_url: str | None = BASE_URL_OPTION,
+    auth_token: str | None = AUTH_TOKEN_OPTION,
+    agent_config: Path | None = AGENT_CONFIG_OPTION,
+    agent_env: List[str] | None = AGENT_ENV_OPTION,
+    deny_permission: List[str] | None = DENY_PERMISSION_OPTION,
 ) -> None:
     _invoke_chat_command(
         model=model,
