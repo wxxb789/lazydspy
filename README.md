@@ -49,9 +49,7 @@ uv run lazydspy
 uv run lazydspy chat [OPTIONS]
 
 Options:
-  -m, --model TEXT       Claude model name (default: claude-opus-4.5)
-  --base-url TEXT        Custom API endpoint
-  --auth-token TEXT      API token (or set ANTHROPIC_API_KEY env var)
+  -m, --model TEXT       Claude model name (default: claude-sonnet-4-20250514)
   --debug                Enable debug mode
   -v, --version          Show version
   --help                 Show help message
@@ -65,10 +63,7 @@ After the conversation, `lazydspy` creates a folder under `generated/<session_id
 generated/<session_id>/
 ├── pipeline.py      # Main optimization script (PEP 723 compliant)
 ├── metadata.json    # Configuration used
-├── README.md        # Usage instructions
-├── DATA_GUIDE.md    # Data preparation guide
-└── sample-data/     # Optional sample JSONL
-    └── train.jsonl
+└── README.md        # Usage instructions
 ```
 
 ### Running the Generated Script
@@ -87,11 +82,10 @@ uv run generated/<session_id>/pipeline.py --mode full --checkpoint-dir checkpoin
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Claude API key (required) |
-| `ANTHROPIC_MODEL` | Model name (default: `claude-opus-4.5`) |
+| `ANTHROPIC_AUTH_TOKEN` | Claude API token (priority 1) |
+| `ANTHROPIC_API_KEY` | Claude API key (priority 2) |
+| `ANTHROPIC_MODEL` | Model name (default: `claude-sonnet-4-20250514`) |
 | `ANTHROPIC_BASE_URL` | Custom API endpoint (optional) |
-| `ANTHROPIC_AUTH_TOKEN` | Alternative to ANTHROPIC_API_KEY |
-| `OPENAI_API_KEY` | OpenAI API key (if using OpenAI models) |
 | `LAZYDSPY_DEBUG` | Enable debug mode (`1`, `true`, `yes`) |
 
 ### Custom Claude Endpoint
@@ -104,8 +98,7 @@ export ANTHROPIC_BASE_URL=http://localhost:8030
 export ANTHROPIC_AUTH_TOKEN=dev-local-token
 export ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 
-# Or via CLI
-uv run lazydspy chat --base-url http://localhost:8030 --auth-token dev-local-token --model claude-3-5-sonnet-20241022
+uv run lazydspy chat
 ```
 
 ## Optimizers
@@ -139,32 +132,25 @@ Model-based instruction optimizer, better for complex reasoning.
 
 ## Architecture
 
-The project follows an **Agentic Architecture**:
+The project uses **Claude Agent SDK** with a streamlined architecture:
 
-1. **Agent driven by System Prompt** (`agent/prompts.py`), not hardcoded logic
-2. **Tools via MCP pattern** (`tools/`) for file, data, and domain operations
-3. **Dynamic script generation** — Agent writes code, not template filling
+1. Uses SDK's built-in tools (Read, Write, Edit, Bash, Glob, Grep)
+2. Custom MCP tools for domain-specific operations (`@tool` decorator)
+3. System prompt extends `claude_code` preset via `append` mode
+4. Multi-turn conversation managed by `ClaudeSDKClient`
 
 ```
 src/lazydspy/
-├── agent/           # Core Agent module
-│   ├── config.py    # AgentConfig
-│   ├── prompts.py   # SYSTEM_PROMPT
-│   ├── runner.py    # AgentRunner
-│   └── session.py   # ConversationSession
-│
-├── models/          # Pydantic data models
-│   ├── config.py    # GenerationConfig
-│   └── hyperparams.py
-│
-├── knowledge/       # Domain knowledge
-│   ├── optimizers.py
-│   └── cost_models.py
-│
-└── tools/           # MCP Tools
-    ├── file_ops.py
-    ├── data_ops.py
-    └── domain_ops.py
+├── __init__.py       # Package exports
+├── __main__.py       # CLI entry point
+├── cli.py            # Typer CLI (~120 lines)
+├── agent.py          # Agent core with ClaudeSDKClient (~160 lines)
+├── tools.py          # MCP tools with @tool decorator (~165 lines)
+├── prompts.py        # System prompt config (~80 lines)
+└── knowledge/        # Domain knowledge
+    ├── __init__.py
+    ├── optimizers.py # OptimizerInfo, OPTIMIZER_REGISTRY
+    └── cost_models.py # MODEL_PRICING, estimate_optimization_cost
 ```
 
 ## Development
@@ -174,9 +160,9 @@ src/lazydspy/
 Run from repo root (recommended order):
 
 ```bash
-uv run ruff check .
-uv run mypy
-uv run pytest
+uv run ruff check src/
+uv run mypy src/lazydspy/
+uv run pytest tests/ -v
 ```
 
 Or run all sequentially:
@@ -189,18 +175,15 @@ make check
 
 ```bash
 uv run pytest tests/ -v
-uv run pytest tests/test_cli_session.py::test_generation_config_overrides_are_typed -v
+uv run pytest tests/test_cli_session.py -v
 ```
 
 ## Dependencies
 
 **Core**:
-- `anthropic` - Claude API client
-- `dspy` - DSPy framework
-- `pydantic>=2` - Data validation
-- `typer>=0.12` - CLI framework
+- `claude-agent-sdk>=0.1.17` - Claude Agent SDK
 - `rich` - Terminal formatting
-- `claude-agent-sdk==0.1.17` - Claude Agent SDK
+- `typer>=0.12` - CLI framework
 
 **Dev**:
 - `pytest>=8.3` - Testing
@@ -211,20 +194,20 @@ uv run pytest tests/test_cli_session.py::test_generation_config_overrides_are_ty
 
 ### Chinese Output Issues on Windows
 
-Use PowerShell instead of cmd:
+Use PowerShell with `-NoProfile` flag instead of cmd:
 
 ```bash
 pwsh -NoProfile -Command "uv run lazydspy chat"
 ```
 
-### API Token Not Set
+### API Key Not Found
 
-Provide via environment variable or CLI:
+Set environment variable:
 
 ```bash
 export ANTHROPIC_API_KEY=your-key
 # or
-uv run lazydspy chat --auth-token your-key
+export ANTHROPIC_AUTH_TOKEN=your-token
 ```
 
 ## License

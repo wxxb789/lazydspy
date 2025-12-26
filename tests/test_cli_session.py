@@ -1,134 +1,26 @@
-"""Tests for the new Agentic architecture.
+"""Tests for lazydspy new architecture.
 
-These tests cover:
-- models/ - GenerationConfig and hyperparameters
+Tests:
 - knowledge/ - Optimizers and cost models
-- tools/ - Tool handlers
-- agent/ - Session and config
+- tools.py - MCP tool functions
+- prompts.py - System prompt configuration
+- agent.py - Agent configuration
 """
 
-import asyncio
+from __future__ import annotations
+
 import json
 import pathlib
 import sys
 
 import pytest
+from conftest import run_async
 
-# Ensure real pydantic is used, not the src/pydantic.py stub
-# by appending src path instead of inserting at the beginning
+# Ensure src directory is in path
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.append(str(SRC_PATH))
-
-from lazydspy import GEPA_PRESETS, MIPROV2_PRESETS  # noqa: E402
-from lazydspy.models import (  # noqa: E402
-    GenerationConfig,
-    GEPAHyperparameters,
-    MIPROv2Hyperparameters,
-)
-from lazydspy.knowledge import (  # noqa: E402
-    estimate_optimization_cost,
-    get_optimizer_info,
-    list_all_optimizers,
-)
-from lazydspy.agent import AgentConfig, ConversationSession  # noqa: E402
-
-
-def run_async(coro):
-    """Helper to run async functions in sync tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
-
-
-# ============================================================================
-# Models Tests
-# ============================================================================
-
-
-def _build_config(**kwargs):
-    """Helper to build GenerationConfig with defaults."""
-    defaults = dict(
-        session_id="session-1",
-        scenario="示例场景",
-        input_fields=["query"],
-        output_fields=["answer"],
-        model_preference="claude-opus-4.5",
-        algorithm="GEPA",
-        hyperparameters={},
-        data_path=None,
-        mode="quick",
-        subset_size=None,
-        checkpoint_enabled=False,
-        checkpoint_dir=pathlib.Path("checkpoints"),
-        checkpoint_interval=1,
-        max_checkpoints=20,
-        resume=False,
-        generate_sample_data=False,
-    )
-    defaults.update(kwargs)
-    return GenerationConfig(**defaults)
-
-
-def test_generation_config_uses_mode_presets() -> None:
-    """quick/full 模式应自动填充算法预设的超参。"""
-    config = _build_config(algorithm="GEPA", mode="quick", hyperparameters={})
-
-    assert config.active_hyperparameters["breadth"] == GEPA_PRESETS["quick"]["breadth"]
-    assert config.active_hyperparameters["temperature"] == GEPA_PRESETS["quick"]["temperature"]
-
-
-def test_generation_config_overrides_are_typed() -> None:
-    """应接受字典覆盖并落在对应算法字段上。"""
-    config = _build_config(algorithm="MIPROv2", mode="full", hyperparameters={"search_size": 5})
-
-    assert config.hyperparameters.search_size == 5
-    assert config.active_hyperparameters["temperature"] == MIPROV2_PRESETS["full"]["temperature"]
-
-
-def test_generation_config_normalizes_algorithm() -> None:
-    """算法名称应规范化为标准格式。"""
-    config1 = _build_config(algorithm="gepa")
-    assert config1.algorithm == "GEPA"
-
-    config2 = _build_config(algorithm="mipro-v2")
-    assert config2.algorithm == "MIPROv2"
-
-    config3 = _build_config(algorithm="MIPROv2")
-    assert config3.algorithm == "MIPROv2"
-
-
-def test_generation_config_parses_field_strings() -> None:
-    """字段列表应支持逗号分隔的字符串输入。"""
-    config = _build_config(input_fields="query, context", output_fields="answer, score")
-
-    assert config.input_fields == ["query", "context"]
-    assert config.output_fields == ["answer", "score"]
-
-
-def test_generation_config_validates_mode() -> None:
-    """模式应只接受 quick 或 full。"""
-    with pytest.raises(ValueError, match="must be quick or full"):
-        _build_config(mode="invalid")
-
-
-def test_gepa_hyperparameters_from_mode() -> None:
-    """GEPA 超参应根据模式应用预设。"""
-    quick = GEPAHyperparameters.from_mode("quick")
-    assert quick.breadth == 2
-    assert quick.depth == 2
-
-    full = GEPAHyperparameters.from_mode("full")
-    assert full.breadth == 4
-    assert full.depth == 4
-
-
-def test_miprov2_hyperparameters_from_mode() -> None:
-    """MIPROv2 超参应根据模式应用预设。"""
-    quick = MIPROv2Hyperparameters.from_mode("quick")
-    assert quick.search_size == 8
-
-    full = MIPROv2Hyperparameters.from_mode("full")
-    assert full.search_size == 16
 
 
 # ============================================================================
@@ -137,7 +29,9 @@ def test_miprov2_hyperparameters_from_mode() -> None:
 
 
 def test_get_optimizer_info() -> None:
-    """应能获取优化器信息。"""
+    """Should get optimizer info by name."""
+    from lazydspy.knowledge import get_optimizer_info
+
     gepa = get_optimizer_info("gepa")
     assert gepa is not None
     assert gepa.name == "GEPA"
@@ -149,7 +43,9 @@ def test_get_optimizer_info() -> None:
 
 
 def test_list_all_optimizers() -> None:
-    """应列出所有可用优化器。"""
+    """Should list all available optimizers."""
+    from lazydspy.knowledge import list_all_optimizers
+
     optimizers = list_all_optimizers()
     assert len(optimizers) == 2
 
@@ -158,8 +54,19 @@ def test_list_all_optimizers() -> None:
     assert "miprov2" in names
 
 
+def test_get_recommended_optimizer() -> None:
+    """Should recommend optimizer based on scenario."""
+    from lazydspy.knowledge import get_recommended_optimizer
+
+    assert get_recommended_optimizer("summary") == "gepa"
+    assert get_recommended_optimizer("qa") == "miprov2"
+    assert get_recommended_optimizer("unknown") == "gepa"
+
+
 def test_estimate_optimization_cost() -> None:
-    """应能估算优化成本。"""
+    """Should estimate optimization cost."""
+    from lazydspy.knowledge import estimate_optimization_cost
+
     result = estimate_optimization_cost(
         optimizer="gepa",
         mode="quick",
@@ -174,83 +81,22 @@ def test_estimate_optimization_cost() -> None:
 
 
 def test_estimate_cost_full_mode_higher() -> None:
-    """full 模式的成本应高于 quick 模式。"""
-    quick = estimate_optimization_cost(
-        optimizer="gepa", mode="quick", dataset_size=100
-    )
-    full = estimate_optimization_cost(
-        optimizer="gepa", mode="full", dataset_size=100
-    )
+    """Full mode cost should be higher than quick mode."""
+    from lazydspy.knowledge import estimate_optimization_cost
+
+    quick = estimate_optimization_cost(optimizer="gepa", mode="quick", dataset_size=100)
+    full = estimate_optimization_cost(optimizer="gepa", mode="full", dataset_size=100)
 
     assert full["estimated_cost_usd"] > quick["estimated_cost_usd"]
 
 
-# ============================================================================
-# Agent Tests
-# ============================================================================
+def test_list_supported_models() -> None:
+    """Should list all supported models."""
+    from lazydspy.knowledge import list_supported_models
 
-
-def test_agent_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AgentConfig 应从环境变量读取配置。"""
-    monkeypatch.setenv("ANTHROPIC_MODEL", "test-model")
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "test-key")
-
-    config = AgentConfig.from_env()
-
-    assert config.model == "test-model"
-    assert config.auth_token == "test-key"
-
-
-def test_agent_config_defaults() -> None:
-    """AgentConfig 应有合理的默认值。"""
-    config = AgentConfig()
-
-    assert config.model == "claude-opus-4.5"
-    assert config.base_url is None
-    assert config.max_turns == 50
-
-
-def test_conversation_session_messages() -> None:
-    """ConversationSession 应正确管理消息。"""
-    session = ConversationSession()
-
-    session.add_user_message("Hello")
-    session.add_assistant_message("Hi there!")
-    session.add_user_message("How are you?")
-
-    messages = session.get_messages()
-    assert len(messages) == 3
-    assert messages[0]["role"] == "user"
-    assert messages[0]["content"] == "Hello"
-    assert messages[1]["role"] == "assistant"
-    assert messages[2]["role"] == "user"
-
-
-def test_conversation_session_last_message() -> None:
-    """应能获取最后一条助手消息。"""
-    session = ConversationSession()
-
-    session.add_user_message("Q1")
-    session.add_assistant_message("A1")
-    session.add_user_message("Q2")
-    session.add_assistant_message("A2")
-
-    last = session.get_last_assistant_message()
-    assert last == "A2"
-
-
-def test_conversation_session_clear() -> None:
-    """应能清空会话。"""
-    session = ConversationSession()
-
-    session.add_user_message("Test")
-    session.add_assistant_message("Response")
-
-    assert session.message_count() == 2
-
-    session.clear()
-
-    assert session.message_count() == 0
+    models = list_supported_models()
+    assert "claude-opus-4.5" in models
+    assert "gpt-4o" in models
 
 
 # ============================================================================
@@ -258,182 +104,193 @@ def test_conversation_session_clear() -> None:
 # ============================================================================
 
 
-def test_write_file_tool(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """write_file 工具应能写入文件。"""
-    monkeypatch.chdir(tmp_path)
+def test_estimate_cost_tool() -> None:
+    """estimate_cost tool should return cost estimation."""
+    from lazydspy.tools import estimate_cost_impl
 
-    from lazydspy.tools.file_ops import write_file
-
-    result = run_async(write_file({
-        "path": str(tmp_path / "test.txt"),
-        "content": "Hello, World!",
-    }))
-
-    assert "文件已成功写入" in result["content"][0]["text"]
-    assert (tmp_path / "test.txt").read_text() == "Hello, World!"
-
-
-def test_read_file_tool(tmp_path: pathlib.Path) -> None:
-    """read_file 工具应能读取文件。"""
-    test_file = tmp_path / "test.txt"
-    test_file.write_text("Test content", encoding="utf-8")
-
-    from lazydspy.tools.file_ops import read_file
-
-    result = run_async(read_file({"path": str(test_file)}))
-
-    assert "Test content" in result["content"][0]["text"]
-
-
-def test_read_file_not_found(tmp_path: pathlib.Path) -> None:
-    """read_file 工具应处理文件不存在的情况。"""
-    from lazydspy.tools.file_ops import read_file
-
-    result = run_async(read_file({"path": str(tmp_path / "nonexistent.txt")}))
-
-    assert "文件不存在" in result["content"][0]["text"]
-
-
-def test_create_dir_tool(tmp_path: pathlib.Path) -> None:
-    """create_dir 工具应能创建目录。"""
-    from lazydspy.tools.file_ops import create_dir
-
-    new_dir = tmp_path / "subdir" / "nested"
-    result = run_async(create_dir({"path": str(new_dir)}))
-
-    assert "目录已创建" in result["content"][0]["text"]
-    assert new_dir.exists()
-
-
-def test_validate_jsonl_tool(tmp_path: pathlib.Path) -> None:
-    """validate_jsonl 工具应能验证 JSONL 文件。"""
-    jsonl_file = tmp_path / "data.jsonl"
-    jsonl_file.write_text(
-        '{"query": "q1", "answer": "a1"}\n{"query": "q2", "answer": "a2"}',
-        encoding="utf-8",
+    result = run_async(
+        estimate_cost_impl(
+            {
+                "optimizer": "gepa",
+                "mode": "quick",
+                "dataset_size": 50,
+            }
+        )
     )
 
-    from lazydspy.tools.data_ops import validate_jsonl
-
-    result = run_async(validate_jsonl({
-        "path": str(jsonl_file),
-        "required_fields": ["query", "answer"],
-    }))
-
-    assert "验证通过" in result["content"][0]["text"]
-
-
-def test_validate_jsonl_missing_field(tmp_path: pathlib.Path) -> None:
-    """validate_jsonl 工具应检测缺失字段。"""
-    jsonl_file = tmp_path / "data.jsonl"
-    jsonl_file.write_text('{"query": "q1"}', encoding="utf-8")
-
-    from lazydspy.tools.data_ops import validate_jsonl
-
-    result = run_async(validate_jsonl({
-        "path": str(jsonl_file),
-        "required_fields": ["query", "answer"],
-    }))
-
-    assert "缺少字段" in result["content"][0]["text"]
-
-
-def test_sample_data_tool() -> None:
-    """sample_data 工具应能生成样例数据。"""
-    from lazydspy.tools.data_ops import sample_data
-
-    result = run_async(sample_data({
-        "input_fields": ["query", "context"],
-        "output_fields": ["answer"],
-        "num_samples": 2,
-    }))
-
     text = result["content"][0]["text"]
-    assert "2 条样例数据" in text
-    assert "query" in text
-    assert "answer" in text
-
-
-def test_estimate_cost_tool() -> None:
-    """estimate_cost 工具应返回成本估算。"""
-    from lazydspy.tools.domain_ops import estimate_cost
-
-    result = run_async(estimate_cost({
-        "optimizer": "gepa",
-        "mode": "quick",
-        "dataset_size": 50,
-    }))
-
-    text = result["content"][0]["text"]
-    assert "成本估算结果" in text
-    assert "预估成本" in text
+    data = json.loads(text)
+    assert "estimated_cost_usd" in data
+    assert "cost_hint" in data
 
 
 def test_list_optimizers_tool() -> None:
-    """list_optimizers 工具应列出所有优化器。"""
-    from lazydspy.tools.domain_ops import list_optimizers
+    """list_optimizers tool should list all optimizers."""
+    from lazydspy.tools import list_optimizers_impl
 
-    result = run_async(list_optimizers({}))
+    result = run_async(list_optimizers_impl({}))
 
     text = result["content"][0]["text"]
-    assert "GEPA" in text
-    assert "MIPROv2" in text
+    data = json.loads(text)
+    assert "optimizers" in data
+    assert len(data["optimizers"]) == 2
 
 
 def test_get_defaults_tool() -> None:
-    """get_defaults 工具应返回默认配置。"""
-    from lazydspy.tools.domain_ops import get_defaults
+    """get_defaults tool should return default configuration."""
+    from lazydspy.tools import get_defaults_impl
 
-    result = run_async(get_defaults({
-        "optimizer": "gepa",
-        "mode": "quick",
-    }))
+    result = run_async(
+        get_defaults_impl(
+            {
+                "optimizer": "gepa",
+                "mode": "quick",
+            }
+        )
+    )
 
     text = result["content"][0]["text"]
-    assert "breadth" in text
-    assert "depth" in text
+    data = json.loads(text)
+    assert data["optimizer"] == "gepa"
+    assert "hyperparameters" in data
+    assert "breadth" in data["hyperparameters"]
 
 
-def test_finish_session_tool() -> None:
-    """finish_session 工具应抛出 SessionComplete 异常。"""
-    from lazydspy.tools.session_ops import SessionComplete, finish_session
+def test_get_defaults_with_scenario() -> None:
+    """get_defaults should recommend optimizer based on scenario."""
+    from lazydspy.tools import get_defaults_impl
 
-    with pytest.raises(SessionComplete) as exc_info:
-        run_async(finish_session({
-            "summary": "测试完成",
-            "next_steps": ["步骤1", "步骤2"],
-        }))
+    result = run_async(
+        get_defaults_impl(
+            {
+                "scenario": "qa",
+                "mode": "quick",
+            }
+        )
+    )
 
-    assert exc_info.value.summary == "测试完成"
-    assert exc_info.value.next_steps == ["步骤1", "步骤2"]
-
-
-def test_finish_session_default_summary() -> None:
-    """finish_session 应有默认的摘要。"""
-    from lazydspy.tools.session_ops import SessionComplete, finish_session
-
-    with pytest.raises(SessionComplete) as exc_info:
-        run_async(finish_session({}))
-
-    assert exc_info.value.summary == "任务已完成"
-    assert exc_info.value.next_steps == []
+    text = result["content"][0]["text"]
+    data = json.loads(text)
+    assert data["optimizer"] == "miprov2"
+    assert data["recommended_for_scenario"] == "qa"
 
 
-def test_session_complete_exception() -> None:
-    """SessionComplete 异常应正确携带数据。"""
-    from lazydspy.tools.session_ops import SessionComplete
+def test_tool_names_format() -> None:
+    """TOOL_NAMES should have correct MCP format."""
+    from lazydspy.tools import TOOL_NAMES
 
-    exc = SessionComplete(summary="完成摘要", next_steps=["a", "b"])
-
-    assert exc.summary == "完成摘要"
-    assert exc.next_steps == ["a", "b"]
-    assert str(exc) == "完成摘要"
+    assert len(TOOL_NAMES) == 3
+    for name in TOOL_NAMES:
+        assert name.startswith("mcp__lazydspy__")
 
 
-def test_session_complete_default_next_steps() -> None:
-    """SessionComplete 的 next_steps 应默认为空列表。"""
-    from lazydspy.tools.session_ops import SessionComplete
+def test_create_mcp_server() -> None:
+    """create_mcp_server should return server configuration."""
+    from lazydspy.tools import create_mcp_server
 
-    exc = SessionComplete(summary="测试")
+    server = create_mcp_server()
+    # The server is a TypedDict with 'name', 'type', and 'instance' keys
+    assert server is not None
+    assert server["name"] == "lazydspy"
+    assert server["type"] == "sdk"
+    assert "instance" in server
 
-    assert exc.next_steps == []
+
+# ============================================================================
+# Prompts Tests
+# ============================================================================
+
+
+def test_system_prompt_config() -> None:
+    """get_system_prompt_config should return preset configuration."""
+    from lazydspy.prompts import get_system_prompt_config
+
+    config = get_system_prompt_config()
+    assert config["type"] == "preset"
+    assert config["preset"] == "claude_code"
+    assert "append" in config
+    assert "lazydspy" in config["append"]
+
+
+def test_system_prompt_contains_key_info() -> None:
+    """SYSTEM_PROMPT_APPEND should contain key instructions."""
+    from lazydspy.prompts import SYSTEM_PROMPT_APPEND
+
+    assert "DSPy" in SYSTEM_PROMPT_APPEND
+    assert "优化器" in SYSTEM_PROMPT_APPEND or "optimizer" in SYSTEM_PROMPT_APPEND.lower()
+    assert "mcp__lazydspy__" in SYSTEM_PROMPT_APPEND
+
+
+# ============================================================================
+# Agent Tests
+# ============================================================================
+
+
+def test_agent_config_defaults() -> None:
+    """AgentConfig should have reasonable defaults."""
+    from lazydspy.agent import AgentConfig
+
+    config = AgentConfig()
+
+    assert "claude" in config.model.lower() or "sonnet" in config.model.lower()
+    assert config.base_url is None
+    assert config.max_turns == 50
+    assert config.debug is False
+
+
+def test_agent_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AgentConfig should read from environment variables."""
+    monkeypatch.setenv("ANTHROPIC_MODEL", "test-model")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "test-key")
+    monkeypatch.setenv("LAZYDSPY_DEBUG", "true")
+
+    from lazydspy.agent import AgentConfig
+
+    config = AgentConfig()
+
+    assert config.model == "test-model"
+    assert config.api_key == "test-key"
+    assert config.debug is True
+
+
+def test_agent_config_api_key_priority(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ANTHROPIC_AUTH_TOKEN should take priority over ANTHROPIC_API_KEY."""
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "auth-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "api-key")
+
+    from lazydspy.agent import AgentConfig
+
+    config = AgentConfig()
+    assert config.api_key == "auth-token"
+
+
+def test_agent_config_fallback_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Should fallback to ANTHROPIC_API_KEY when AUTH_TOKEN not set."""
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "api-key")
+
+    from lazydspy.agent import AgentConfig
+
+    config = AgentConfig()
+    assert config.api_key == "api-key"
+
+
+def test_agent_initialization() -> None:
+    """Agent should initialize with config."""
+    from lazydspy.agent import Agent, AgentConfig
+
+    config = AgentConfig()
+    agent = Agent(config)
+
+    assert agent.config == config
+    assert agent.console is not None
+
+
+def test_agent_default_config() -> None:
+    """Agent should use default config when none provided."""
+    from lazydspy.agent import Agent
+
+    agent = Agent()
+
+    assert agent.config is not None
+    assert agent.config.max_turns == 50

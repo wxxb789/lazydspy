@@ -17,7 +17,7 @@ pwsh -NoProfile -Command "uv run lazydspy --help"
 
 ## Project Overview
 
-**lazydspy** is an Agent-driven CLI tool that helps users generate DSPy prompt optimization scripts through interactive dialogue. Instead of hardcoded question lists and templates, the Agent dynamically collects requirements and generates complete, ready-to-run Python scripts.
+**lazydspy** is an Agent-driven CLI tool that helps users generate DSPy prompt optimization scripts through interactive dialogue. Built on **Claude Agent SDK**, it uses preset `claude_code` capabilities extended with custom MCP tools.
 
 ### Key Concepts
 
@@ -28,44 +28,26 @@ pwsh -NoProfile -Command "uv run lazydspy --help"
 
 ## Architecture
 
-The project follows an **Agentic Architecture** where:
-1. The Agent is driven by a system prompt (`agent/prompts.py`), not hardcoded logic
-2. Tools are provided via MCP (Model Context Protocol) pattern
-3. Scripts are generated dynamically by the Agent, not from templates
+The project uses **Claude Agent SDK** with a streamlined architecture:
+1. Uses SDK's built-in tools (Read, Write, Edit, Bash, Glob, Grep)
+2. Custom MCP tools for domain-specific operations (@tool decorator)
+3. System prompt extends `claude_code` preset via `append` mode
+4. Multi-turn conversation managed by ClaudeSDKClient
 
 ### Directory Structure
 
 ```
 src/lazydspy/
-├── __init__.py          # Package exports
-├── __main__.py          # CLI entry point
-├── cli.py               # Typer CLI (thin wrapper around AgentRunner)
-├── schemas.py           # MetricResult, ScoreDetail schemas
-│
-├── agent/               # Core Agent module
-│   ├── config.py        # AgentConfig - model, auth, settings
-│   ├── prompts.py       # SYSTEM_PROMPT - Agent behavior definition
-│   ├── runner.py        # AgentRunner - conversation loop + tool execution
-│   └── session.py       # ConversationSession - message history
-│
-├── models/              # Pydantic data models
-│   ├── config.py        # GenerationConfig - unified generation settings
-│   └── hyperparams.py   # GEPAHyperparameters, MIPROv2Hyperparameters, presets
-│
-├── knowledge/           # Domain knowledge
-│   ├── optimizers.py    # OptimizerInfo, OPTIMIZER_REGISTRY
-│   └── cost_models.py   # MODEL_PRICING, estimate_optimization_cost
-│
-└── tools/               # MCP Tools for Agent
-    ├── file_ops.py      # write_file, read_file, create_dir
-    ├── data_ops.py      # validate_jsonl, check_schema, sample_data
-    └── domain_ops.py    # estimate_cost, list_optimizers, get_defaults
-
-src/                     # Legacy/stub modules (for tests)
-├── core.py              # WebSummarySignature, DeepSummarizer (example DSPy module)
-├── dspy.py              # Lightweight dspy stub for local testing
-├── metrics.py           # llm_judge_metric using OpenAI
-└── pydantic.py          # Pydantic stub for environments without real pydantic
+├── __init__.py       # Package exports, version 0.2.0
+├── __main__.py       # CLI entry point
+├── cli.py            # Typer CLI (~120 lines)
+├── agent.py          # Agent core with ClaudeSDKClient (~160 lines)
+├── tools.py          # MCP tools with @tool decorator (~160 lines)
+├── prompts.py        # System prompt config (~80 lines)
+└── knowledge/        # Domain knowledge (unchanged)
+    ├── __init__.py
+    ├── optimizers.py # OptimizerInfo, OPTIMIZER_REGISTRY
+    └── cost_models.py # MODEL_PRICING, estimate_optimization_cost
 ```
 
 ## Common Commands
@@ -84,9 +66,6 @@ uv run lazydspy --help
 # Run tests
 uv run pytest tests/ -v
 
-# Run specific test
-uv run pytest tests/test_cli_session.py::test_generation_config_overrides_are_typed -v
-
 # Type checking
 uv run mypy src/lazydspy/
 
@@ -98,48 +77,44 @@ uv run ruff format src/
 ### Testing Notes
 
 - Tests are in `tests/` directory
-- `conftest.py` installs stubs for `rich`, `anthropic`, and `typer` to allow tests to run without network dependencies
-- Use `run_async()` helper for testing async tool functions (not `@pytest.mark.asyncio`)
-- The `src/pydantic.py` stub exists for legacy compatibility - ensure tests use real pydantic by appending (not inserting) src path
+- `conftest.py` installs stubs for `rich`, `typer`, and `claude_agent_sdk`
+- Use `run_async()` helper for testing async tool functions
+- Tool implementation functions (e.g. `estimate_cost_impl`) are exported separately for testing
 
 ## Key Files
 
-### Agent System Prompt (`agent/prompts.py`)
+### Agent (`agent.py`)
 
-This is the core of the Agentic architecture. The SYSTEM_PROMPT defines:
-- Agent role and behavior guidelines
-- What information to collect (scenario, fields, model, optimizer, mode)
-- Script generation standards (PEP 723, Typer CLI, Pydantic v2)
-- Available tools and when to use them
-- Output directory structure
+Core Agent using Claude Agent SDK:
+- `AgentConfig`: Configuration dataclass (model, debug, workdir)
+- `Agent`: Main class with `run()` method for conversation loop
+- Uses `ClaudeSDKClient` for multi-turn conversations
 
-### GenerationConfig (`models/config.py`)
+### Tools (`tools.py`)
 
-Unified configuration for script generation with:
-- Field validators for algorithm, mode, fields parsing
-- Hyperparameter preset application via `model_validator`
-- Support for both GEPA and MIPROv2 hyperparameters
+MCP tools using @tool decorator:
+- `estimate_cost`: Estimate optimization costs
+- `list_optimizers`: List available optimizers
+- `get_defaults`: Get default hyperparameters
+- Business logic in `*_impl` functions for easier testing
 
-**Important**: The `hyperparameters` field uses `Any` type to avoid Pydantic v2's Union type coercion, which would convert dict to model instance before validators run.
+### Prompts (`prompts.py`)
 
-### Tools (`tools/`)
+System prompt configuration:
+- Uses `preset: claude_code` with `append` mode
+- `SYSTEM_PROMPT_APPEND` contains lazydspy-specific instructions
+- `get_system_prompt_config()` returns the configuration dict
 
-All tools return a standardized format:
-```python
-{
-    "content": [
-        {"type": "text", "text": "..."}
-    ]
-}
-```
+### Knowledge (`knowledge/`)
 
-Tools are registered in `tools/__init__.py` and exposed via `get_all_tool_schemas()`.
+Domain knowledge (unchanged from v0.1.0):
+- `optimizers.py`: Optimizer registry and recommendations
+- `cost_models.py`: Cost estimation for different models
 
 ## Code Style
 
 - Python 3.12+
-- Pydantic v2 for data validation
-- Type hints throughout (strict mypy)
+- Type hints throughout
 - Ruff for linting and formatting (line length 100)
 - Chinese comments in domain-specific code
 - English for docstrings and public API
@@ -147,11 +122,9 @@ Tools are registered in `tools/__init__.py` and exposed via `get_all_tool_schema
 ## Dependencies
 
 Core:
-- `dspy` - DSPy framework
-- `pydantic>=2` - Data validation
-- `typer>=0.12` - CLI framework
+- `claude-agent-sdk>=0.1.17` - Claude Agent SDK
 - `rich` - Terminal formatting
-- `claude-agent-sdk==0.1.17` - Claude Agent SDK
+- `typer>=0.12` - CLI framework
 
 Dev:
 - `pytest>=8.3` - Testing
@@ -162,8 +135,9 @@ Dev:
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Claude API key (required) |
-| `ANTHROPIC_MODEL` | Model name (default: `claude-opus-4.5`) |
+| `ANTHROPIC_AUTH_TOKEN` | Claude API token (priority 1) |
+| `ANTHROPIC_API_KEY` | Claude API key (priority 2) |
+| `ANTHROPIC_MODEL` | Model name (default: `claude-sonnet-4-20250514`) |
 | `ANTHROPIC_BASE_URL` | Custom API endpoint (optional) |
 | `LAZYDSPY_DEBUG` | Enable debug mode (`1`, `true`, `yes`) |
 
@@ -175,10 +149,7 @@ When the Agent generates a script, it creates:
 generated/<session_id>/
 ├── pipeline.py      # Main optimization script (PEP 723 compliant)
 ├── metadata.json    # Configuration used
-├── README.md        # Usage instructions
-├── DATA_GUIDE.md    # Data preparation guide
-└── sample-data/     # Optional sample JSONL
-    └── train.jsonl
+└── README.md        # Usage instructions
 ```
 
 ## Optimizer Presets
@@ -202,13 +173,16 @@ If tests fail with import errors, check:
 1. `sys.path` order - ensure real packages are found before stubs
 2. `conftest.py` properly installs stubs before imports
 
-### Hyperparameter Preset Not Applied
-The `GenerationConfig` uses a model validator to apply presets. If presets aren't applied:
-1. Check that `hyperparameters` is passed as a dict, not a model instance
-2. The validator applies presets first, then user overrides
-
 ### Chinese Output Issues on Windows
 Use PowerShell with `-NoProfile` flag instead of cmd:
 ```bash
 pwsh -NoProfile -Command "uv run lazydspy chat"
+```
+
+### API Key Not Found
+Set environment variable:
+```bash
+export ANTHROPIC_API_KEY=your-key
+# or
+export ANTHROPIC_AUTH_TOKEN=your-token
 ```

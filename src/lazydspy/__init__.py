@@ -1,45 +1,42 @@
-"""lazydspy - Generate DSPy optimization scripts through conversation.
+"""lazydspy - DSPy 优化脚本生成器.
 
-This package provides an Agent-driven CLI tool that helps users create
-DSPy prompt optimization scripts through interactive dialogue.
+An Agent-driven CLI tool that helps users create DSPy prompt
+optimization scripts through interactive dialogue.
 """
 
 from __future__ import annotations
 
-from .cli import main
-from .models import (
-    GEPA_PRESETS,
-    MIPROV2_PRESETS,
-    CheckpointSettings,
-    CheckpointState,
-    GenerationConfig,
-    GEPAHyperparameters,
-    MIPROv2Hyperparameters,
-    OptimizationResultSummary,
-    OptimizerChoice,
-    RunMode,
-)
-from .schemas import MetricResult, ScoreDetail
+from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+
+
+# Lazy imports to avoid circular dependencies
+def __getattr__(name: str) -> Any:
+    """Lazy import of submodules."""
+    if name == "main":
+        from lazydspy.cli import main
+
+        return main
+    if name == "Agent":
+        from lazydspy.agent import Agent
+
+        return Agent
+    if name == "AgentConfig":
+        from lazydspy.agent import AgentConfig
+
+        return AgentConfig
+    if name == "run_agent":
+        from lazydspy.agent import run_agent
+
+        return run_agent
+    raise AttributeError(f"module 'lazydspy' has no attribute {name!r}")
+
 
 __all__ = [
-    # Version
     "__version__",
-    # CLI
     "main",
-    # Models
-    "GenerationConfig",
-    "GEPAHyperparameters",
-    "MIPROv2Hyperparameters",
-    "GEPA_PRESETS",
-    "MIPROV2_PRESETS",
-    "CheckpointSettings",
-    "CheckpointState",
-    "OptimizationResultSummary",
-    "OptimizerChoice",
-    "RunMode",
-    # Schemas
-    "MetricResult",
-    "ScoreDetail",
+    "Agent",
+    "AgentConfig",
+    "run_agent",
 ]

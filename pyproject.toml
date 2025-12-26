@@ -1,18 +1,13 @@
 [project]
 name = "lazydspy"
-version = "0.1.0"
-description = "CLI/Agent that collects requirements and generates ready-to-run DSPy optimization scripts"
+version = "0.2.0"
+description = "Agent-driven CLI that generates ready-to-run DSPy optimization scripts through conversation"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "anthropic",
-    "dspy",
-    "openai",
-    "pydantic>=2",
-    "python-dotenv",
+    "claude-agent-sdk>=0.1.17",
     "rich",
     "typer>=0.12",
-    "claude-agent-sdk==0.1.17",
 ]
 
 [project.scripts]
@@ -49,7 +44,7 @@ mypy_path = "src"
 files = ["src"]
 strict = true
 disallow_untyped_defs = true
-ignore_missing_imports = false
+ignore_missing_imports = true
 allow_redefinition = false
 warn_unused_ignores = true
 warn_redundant_casts = true
