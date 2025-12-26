@@ -49,9 +49,8 @@ uv run lazydspy
 uv run lazydspy chat [OPTIONS]
 
 选项:
-  -m, --model TEXT       Claude 模型名称（默认: claude-opus-4.5）
-  --base-url TEXT        自定义 API 端点
-  --auth-token TEXT      API 令牌（或设置 ANTHROPIC_API_KEY 环境变量）
+  -m, --model TEXT       Claude 模型名称（默认: claude-sonnet-4-20250514）
+  -w, --workdir PATH     工作目录
   --debug                启用调试模式
   -v, --version          显示版本
   --help                 显示帮助信息
@@ -59,16 +58,13 @@ uv run lazydspy chat [OPTIONS]
 
 ## 生成的输出
 
-对话完成后，`lazydspy` 会在 `generated/<session_id>/` 下创建一个文件夹：
+对话完成后，`lazydspy` 会在 `generated/<session_id>/` 下创建文件：
 
 ```
 generated/<session_id>/
 ├── pipeline.py      # 主优化脚本（符合 PEP 723）
 ├── metadata.json    # 使用的配置信息
-├── README.md        # 使用说明
-├── DATA_GUIDE.md    # 数据准备指南
-└── sample-data/     # 可选的示例 JSONL
-    └── train.jsonl
+└── README.md        # 运行说明
 ```
 
 ### 运行生成的脚本
@@ -87,11 +83,10 @@ uv run generated/<session_id>/pipeline.py --mode full --checkpoint-dir checkpoin
 
 | 变量 | 描述 |
 |------|------|
-| `ANTHROPIC_API_KEY` | Claude API 密钥（必需） |
-| `ANTHROPIC_MODEL` | 模型名称（默认: `claude-opus-4.5`） |
+| `ANTHROPIC_AUTH_TOKEN` | Claude API 令牌（优先级 1） |
+| `ANTHROPIC_API_KEY` | Claude API 密钥（优先级 2） |
+| `ANTHROPIC_MODEL` | 模型名称（默认: `claude-sonnet-4-20250514`） |
 | `ANTHROPIC_BASE_URL` | 自定义 API 端点（可选） |
-| `ANTHROPIC_AUTH_TOKEN` | ANTHROPIC_API_KEY 的替代方式 |
-| `OPENAI_API_KEY` | OpenAI API 密钥（如果使用 OpenAI 模型） |
 | `LAZYDSPY_DEBUG` | 启用调试模式（`1`, `true`, `yes`） |
 
 ### 自定义 Claude 端点
@@ -99,13 +94,11 @@ uv run generated/<session_id>/pipeline.py --mode full --checkpoint-dir checkpoin
 用于本地 Claude 代理或自托管端点：
 
 ```bash
-# 通过环境变量
 export ANTHROPIC_BASE_URL=http://localhost:8030
 export ANTHROPIC_AUTH_TOKEN=dev-local-token
 export ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 
-# 或通过 CLI
-uv run lazydspy chat --base-url http://localhost:8030 --auth-token dev-local-token --model claude-3-5-sonnet-20241022
+uv run lazydspy chat
 ```
 
 ## 优化器
@@ -139,32 +132,25 @@ uv run lazydspy chat --base-url http://localhost:8030 --auth-token dev-local-tok
 
 ## 架构
 
-本项目遵循 **Agentic 架构**：
+本项目使用 **Claude Agent SDK** 构建，采用精简架构：
 
-1. **Agent 由 System Prompt 驱动**（`agent/prompts.py`），而非硬编码逻辑
-2. **通过 MCP 模式提供工具**（`tools/`），用于文件、数据和领域操作
-3. **动态脚本生成**——Agent 编写代码，而非模板填充
+1. 使用 SDK 内置工具（Read, Write, Edit, Bash, Glob, Grep）
+2. 通过 `@tool` 装饰器定义 MCP 业务工具
+3. System Prompt 使用 `claude_code` 预设 + `append` 模式扩展
+4. 多轮对话由 `ClaudeSDKClient` 管理
 
 ```
 src/lazydspy/
-├── agent/           # 核心 Agent 模块
-│   ├── config.py    # AgentConfig
-│   ├── prompts.py   # SYSTEM_PROMPT
-│   ├── runner.py    # AgentRunner
-│   └── session.py   # ConversationSession
-│
-├── models/          # Pydantic 数据模型
-│   ├── config.py    # GenerationConfig
-│   └── hyperparams.py
-│
-├── knowledge/       # 领域知识
-│   ├── optimizers.py
-│   └── cost_models.py
-│
-└── tools/           # MCP 工具
-    ├── file_ops.py
-    ├── data_ops.py
-    └── domain_ops.py
+├── __init__.py       # 包导出
+├── __main__.py       # CLI 入口点
+├── cli.py            # Typer CLI（~130 行）
+├── agent.py          # Agent 核心，ClaudeSDKClient（~165 行）
+├── tools.py          # MCP 工具，@tool 装饰器（~175 行）
+├── prompts.py        # System Prompt 配置（~80 行）
+└── knowledge/        # 领域知识
+    ├── __init__.py
+    ├── optimizers.py # OptimizerInfo（Pydantic v2），优化器注册表
+    └── cost_models.py # 成本估算模型
 ```
 
 ## 开发
@@ -174,9 +160,9 @@ src/lazydspy/
 在仓库根目录运行（推荐顺序）：
 
 ```bash
-uv run ruff check .
-uv run mypy
-uv run pytest
+uv run ruff check src/
+uv run mypy src/lazydspy/
+uv run pytest tests/ -v
 ```
 
 或一次性运行所有检查：
@@ -189,18 +175,14 @@ make check
 
 ```bash
 uv run pytest tests/ -v
-uv run pytest tests/test_cli_session.py::test_generation_config_overrides_are_typed -v
 ```
 
 ## 依赖
 
 **核心**：
-- `anthropic` - Claude API 客户端
-- `dspy` - DSPy 框架
-- `pydantic>=2` - 数据验证
-- `typer>=0.12` - CLI 框架
+- `claude-agent-sdk>=0.1.17` - Claude Agent SDK
 - `rich` - 终端格式化
-- `claude-agent-sdk==0.1.17` - Claude Agent SDK
+- `typer>=0.12` - CLI 框架
 
 **开发**：
 - `pytest>=8.3` - 测试
@@ -211,7 +193,7 @@ uv run pytest tests/test_cli_session.py::test_generation_config_overrides_are_ty
 
 ### Windows 下中文输出问题
 
-使用 PowerShell 代替 cmd：
+使用 PowerShell 并带 `-NoProfile` 参数：
 
 ```bash
 pwsh -NoProfile -Command "uv run lazydspy chat"
@@ -219,12 +201,12 @@ pwsh -NoProfile -Command "uv run lazydspy chat"
 
 ### API 令牌未设置
 
-通过环境变量或 CLI 提供：
+设置环境变量：
 
 ```bash
 export ANTHROPIC_API_KEY=your-key
 # 或
-uv run lazydspy chat --auth-token your-key
+export ANTHROPIC_AUTH_TOKEN=your-token
 ```
 
 ## 许可证
