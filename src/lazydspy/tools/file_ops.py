@@ -2,8 +2,73 @@
 
 from __future__ import annotations
 
+import os
+import sys
+import traceback
 from pathlib import Path
 from typing import Any
+
+
+def _format_exception_details(e: Exception, context: dict[str, Any] | None = None) -> str:
+    """Format detailed exception information for debugging."""
+
+    def _add_section(title: str | None, lines: list[str]) -> None:
+        clean = [line for line in lines if line is not None]
+        if not clean:
+            return
+        if title:
+            sections.append(f"{title}\n" + "\n".join(clean))
+        else:
+            sections.append("\n".join(clean))
+
+    sections: list[str] = []
+
+    # Basic exception info
+    basic_info = [
+        f"异常类型: {type(e).__module__}.{type(e).__name__}",
+        f"异常消息: {e}",
+        f"异常参数: {e.args}",
+    ]
+
+    # OSError specific attributes
+    if isinstance(e, OSError):
+        basic_info.extend(
+            f"{name}: {value}"
+            for name, value in (
+                ("错误码 (errno)", e.errno),
+                ("系统错误消息", e.strerror),
+                ("相关文件", e.filename),
+                ("相关文件2", e.filename2),
+            )
+            if value is not None
+        )
+
+    # Exception chain
+    if e.__cause__:
+        basic_info.append(f"直接原因 (__cause__): {type(e.__cause__).__name__}: {e.__cause__}")
+    if e.__context__ and e.__context__ is not e.__cause__:
+        basic_info.append(f"上下文异常 (__context__): {type(e.__context__).__name__}: {e.__context__}")
+
+    _add_section(None, basic_info)
+
+    # Context information
+    if context:
+        context_lines = [f"{k}: {v}" for k, v in context.items() if v is not None]
+        _add_section("=== 上下文信息 ===", context_lines)
+
+    # Environment info
+    env_info = [
+        f"当前工作目录: {os.getcwd()}",
+        f"Python 版本: {sys.version}",
+        f"平台: {sys.platform}",
+    ]
+    _add_section("=== 环境信息 ===", env_info)
+
+    # Full traceback (includes cause/context automatically)
+    tb_text = "".join(traceback.TracebackException.from_exception(e).format())
+    _add_section("=== 完整堆栈跟踪 ===", [tb_text])
+
+    return "\n\n".join(sections)
 
 
 async def write_file(args: dict[str, Any]) -> dict[str, Any]:
@@ -37,11 +102,18 @@ async def write_file(args: dict[str, Any]) -> dict[str, Any]:
             ]
         }
     except Exception as e:
+        context = {
+            "操作": "write_file",
+            "目标路径": args.get("path"),
+            "绝对路径": str(Path(args.get("path", "")).absolute()) if args.get("path") else None,
+            "内容长度": len(args.get("content", "")) if args.get("content") else None,
+            "编码": args.get("encoding", "utf-8"),
+        }
         return {
             "content": [
                 {
                     "type": "text",
-                    "text": f"写入文件失败: {e}",
+                    "text": f"写入文件失败\n\n{_format_exception_details(e, context)}",
                 }
             ]
         }
@@ -82,11 +154,17 @@ async def read_file(args: dict[str, Any]) -> dict[str, Any]:
             ]
         }
     except Exception as e:
+        context = {
+            "操作": "read_file",
+            "目标路径": args.get("path"),
+            "绝对路径": str(Path(args.get("path", "")).absolute()) if args.get("path") else None,
+            "编码": args.get("encoding", "utf-8"),
+        }
         return {
             "content": [
                 {
                     "type": "text",
-                    "text": f"读取文件失败: {e}",
+                    "text": f"读取文件失败\n\n{_format_exception_details(e, context)}",
                 }
             ]
         }
@@ -117,11 +195,17 @@ async def create_dir(args: dict[str, Any]) -> dict[str, Any]:
             ]
         }
     except Exception as e:
+        context = {
+            "操作": "create_dir",
+            "目标路径": args.get("path"),
+            "绝对路径": str(Path(args.get("path", "")).absolute()) if args.get("path") else None,
+            "创建父目录": args.get("parents", True),
+        }
         return {
             "content": [
                 {
                     "type": "text",
-                    "text": f"创建目录失败: {e}",
+                    "text": f"创建目录失败\n\n{_format_exception_details(e, context)}",
                 }
             ]
         }
