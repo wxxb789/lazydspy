@@ -90,6 +90,22 @@ def test_estimate_cost_full_mode_higher() -> None:
     assert full["estimated_cost_usd"] > quick["estimated_cost_usd"]
 
 
+def test_estimate_cost_invalid_mode() -> None:
+    """Invalid mode should raise a clear error."""
+    from lazydspy.knowledge import estimate_optimization_cost
+
+    with pytest.raises(ValueError):
+        estimate_optimization_cost(optimizer="gepa", mode="fast", dataset_size=10)
+
+
+def test_estimate_cost_negative_dataset_size() -> None:
+    """Negative dataset sizes should be rejected."""
+    from lazydspy.knowledge import estimate_optimization_cost
+
+    with pytest.raises(ValueError):
+        estimate_optimization_cost(optimizer="gepa", mode="quick", dataset_size=-1)
+
+
 def test_list_supported_models() -> None:
     """Should list all supported models."""
     from lazydspy.knowledge import list_supported_models
@@ -122,6 +138,23 @@ def test_estimate_cost_tool() -> None:
     data = json.loads(text)
     assert "estimated_cost_usd" in data
     assert "cost_hint" in data
+
+
+def test_estimate_cost_tool_invalid_mode() -> None:
+    """estimate_cost tool should surface validation errors."""
+    from lazydspy.tools import estimate_cost_impl
+
+    result = run_async(
+        estimate_cost_impl(
+            {
+                "optimizer": "gepa",
+                "mode": "fast",
+            }
+        )
+    )
+
+    text = result["content"][0]["text"]
+    assert "参数错误" in text
 
 
 def test_list_optimizers_tool() -> None:

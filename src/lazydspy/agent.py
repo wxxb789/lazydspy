@@ -72,11 +72,26 @@ class Agent:
             *TOOL_NAMES,
         ]
 
+        env: dict[str, str] = {}
+        if self.config.model:
+            env["ANTHROPIC_MODEL"] = self.config.model
+        if self.config.base_url:
+            env["ANTHROPIC_BASE_URL"] = self.config.base_url
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if auth_token:
+            env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+        elif api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+        if self.config.debug:
+            env["LAZYDSPY_DEBUG"] = "1"
+
         return ClaudeAgentOptions(
-            system_prompt=get_system_prompt_config(),  # type: ignore[arg-type]
+            system_prompt=get_system_prompt_config(),
             mcp_servers={"lazydspy": create_mcp_server()},
             allowed_tools=allowed_tools,
             max_turns=self.config.max_turns,
+            env=env,
             cwd=str(self.config.workdir),
         )
 
@@ -91,6 +106,18 @@ class Agent:
                 border_style="blue",
             )
         )
+        if self.config.debug:
+            self.console.print(
+                Panel(
+                    "[bold]调试信息[/]\n"
+                    f"model: {self.config.model}\n"
+                    f"base_url: {self.config.base_url or 'default'}\n"
+                    f"workdir: {self.config.workdir}\n"
+                    f"max_turns: {self.config.max_turns}",
+                    title="Debug",
+                    border_style="yellow",
+                )
+            )
 
     def _display_response(self, text: str) -> None:
         """Display assistant response."""
@@ -140,7 +167,7 @@ class Agent:
 def run_agent(
     *,
     model: str | None = None,
-    debug: bool = False,
+    debug: bool | None = None,
     workdir: Path | None = None,
 ) -> None:
     """Convenience function to run the agent.
@@ -150,10 +177,13 @@ def run_agent(
         debug: Enable debug mode
         workdir: Working directory
     """
+    defaults = AgentConfig()
     config = AgentConfig(
-        model=model or AgentConfig().model,
-        debug=debug,
-        workdir=workdir or Path.cwd(),
+        model=model or defaults.model,
+        debug=defaults.debug if debug is None else debug,
+        base_url=defaults.base_url,
+        workdir=workdir or defaults.workdir,
+        max_turns=defaults.max_turns,
     )
     agent = Agent(config)
     agent.run()

@@ -5,7 +5,7 @@ Uses preset + append mode to extend claude_code capabilities.
 
 from __future__ import annotations
 
-from typing import Any
+from claude_agent_sdk.types import SystemPromptPreset
 
 # Append to claude_code preset - focused on DSPy script generation
 SYSTEM_PROMPT_APPEND = """
@@ -60,7 +60,7 @@ SYSTEM_PROMPT_APPEND = """
 """
 
 
-def get_system_prompt_config() -> dict[str, Any]:
+def get_system_prompt_config() -> SystemPromptPreset:
     """Get system prompt configuration for ClaudeAgentOptions.
 
     Uses preset + append mode to extend claude_code capabilities

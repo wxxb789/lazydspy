@@ -7,7 +7,7 @@ Business logic is separated into _impl functions for easier testing.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -24,6 +24,33 @@ def _make_text_response(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
 
 
+def _normalize_mode(
+    value: Any,
+    default: Literal["quick", "full"] = "quick",
+) -> Literal["quick", "full"]:
+    """Normalize and validate mode input."""
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text == "quick":
+        return "quick"
+    if text == "full":
+        return "full"
+    raise ValueError("mode 必须是 quick 或 full")
+
+
+def _normalize_optimizer(value: Any, default: str = "gepa") -> str:
+    """Normalize optimizer input."""
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    return text
+
+
 # ============================================================================
 # Business Logic (testable without MCP)
 # ============================================================================
@@ -31,17 +58,22 @@ def _make_text_response(text: str) -> dict[str, Any]:
 
 async def estimate_cost_impl(args: dict[str, Any]) -> dict[str, Any]:
     """Estimate the cost of running a DSPy optimization."""
-    optimizer = args.get("optimizer", "gepa")
-    mode = args.get("mode", "quick")
-    dataset_size = args.get("dataset_size", 50)
-    model = args.get("model", "claude-opus-4.5")
+    try:
+        optimizer = _normalize_optimizer(args.get("optimizer"), default="gepa")
+        mode = _normalize_mode(args.get("mode"), default="quick")
+        dataset_size = args.get("dataset_size", 50)
+        model = args.get("model")
+        if model is None or (isinstance(model, str) and not model.strip()):
+            model = "claude-opus-4.5"
 
-    result = estimate_optimization_cost(
-        optimizer=optimizer,
-        mode=mode,
-        dataset_size=dataset_size,
-        model=model,
-    )
+        result = estimate_optimization_cost(
+            optimizer=optimizer,
+            mode=mode,
+            dataset_size=dataset_size,
+            model=str(model),
+        )
+    except ValueError as exc:
+        return _make_text_response(f"参数错误: {exc}")
 
     return _make_text_response(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -62,8 +94,17 @@ async def list_optimizers_impl(args: dict[str, Any]) -> dict[str, Any]:
 async def get_defaults_impl(args: dict[str, Any]) -> dict[str, Any]:
     """Get default configuration for an optimizer."""
     scenario = args.get("scenario")
+    if isinstance(scenario, str):
+        scenario = scenario.strip() or None
+
     optimizer_name = args.get("optimizer")
-    mode = args.get("mode", "quick")
+    if isinstance(optimizer_name, str):
+        optimizer_name = optimizer_name.strip().lower() or None
+
+    try:
+        mode = _normalize_mode(args.get("mode"), default="quick")
+    except ValueError as exc:
+        return _make_text_response(f"参数错误: {exc}")
 
     # Recommend optimizer based on scenario if not specified
     if not optimizer_name and scenario:

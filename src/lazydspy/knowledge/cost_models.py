@@ -31,6 +31,57 @@ OPTIMIZER_CALL_ESTIMATES: dict[str, dict[str, dict[str, int]]] = {
 }
 
 
+def _coerce_non_negative_int(value: Any, name: str) -> int:
+    """Coerce a value to a non-negative integer."""
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{name} 必须是非负整数")
+
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"{name} 必须是非负整数")
+        result = int(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"{name} 必须是非负整数")
+        try:
+            result = int(text)
+        except ValueError:
+            try:
+                number = float(text)
+            except ValueError as exc:
+                raise ValueError(f"{name} 必须是非负整数") from exc
+            if not number.is_integer():
+                raise ValueError(f"{name} 必须是非负整数") from None
+            result = int(number)
+
+    if result < 0:
+        raise ValueError(f"{name} 必须是非负整数")
+
+    return result
+
+
+def _normalize_optimizer(optimizer: str) -> str:
+    """Normalize and validate optimizer name."""
+    key = str(optimizer).strip().lower()
+    if not key:
+        raise ValueError("optimizer 不能为空")
+    if key not in OPTIMIZER_CALL_ESTIMATES:
+        valid = ", ".join(sorted(OPTIMIZER_CALL_ESTIMATES))
+        raise ValueError(f"optimizer 必须是: {valid}")
+    return key
+
+
+def _normalize_mode(mode: str) -> str:
+    """Normalize and validate run mode."""
+    key = str(mode).strip().lower()
+    if key not in {"quick", "full"}:
+        raise ValueError("mode 必须是 quick 或 full")
+    return key
+
+
 def estimate_optimization_cost(
     optimizer: str,
     mode: Literal["quick", "full"],
@@ -52,24 +103,31 @@ def estimate_optimization_cost(
     Returns:
         Cost estimation details
     """
+    optimizer_key = _normalize_optimizer(optimizer)
+    mode_key = _normalize_mode(mode)
+    dataset_size_int = _coerce_non_negative_int(dataset_size, "dataset_size")
+    avg_input_tokens_int = _coerce_non_negative_int(avg_input_tokens, "avg_input_tokens")
+    avg_output_tokens_int = _coerce_non_negative_int(avg_output_tokens, "avg_output_tokens")
+
+    model_key = str(model).strip() if model else ""
+    if not model_key:
+        model_key = "claude-opus-4.5"
+
     # Get pricing, default to Claude Sonnet if unknown model
-    pricing = MODEL_PRICING.get(model, MODEL_PRICING["claude-opus-4.5"])
+    pricing = MODEL_PRICING.get(model_key, MODEL_PRICING["claude-opus-4.5"])
 
     # Get call estimates
-    call_estimates = OPTIMIZER_CALL_ESTIMATES.get(
-        optimizer.lower(),
-        OPTIMIZER_CALL_ESTIMATES["gepa"],
-    )
-    mode_estimates = call_estimates.get(mode, call_estimates["quick"])
+    call_estimates = OPTIMIZER_CALL_ESTIMATES[optimizer_key]
+    mode_estimates = call_estimates[mode_key]
 
     # Calculate total calls
     calls_per_example = mode_estimates["calls_per_example"]
     overhead = mode_estimates["overhead_calls"]
-    total_calls = calls_per_example * dataset_size + overhead
+    total_calls = calls_per_example * dataset_size_int + overhead
 
     # Calculate tokens
-    total_input_tokens = total_calls * avg_input_tokens
-    total_output_tokens = total_calls * avg_output_tokens
+    total_input_tokens = total_calls * avg_input_tokens_int
+    total_output_tokens = total_calls * avg_output_tokens_int
 
     # Calculate costs
     input_cost = (total_input_tokens / 1_000_000) * pricing["input"]
@@ -77,10 +135,10 @@ def estimate_optimization_cost(
     total_cost = input_cost + output_cost
 
     return {
-        "optimizer": optimizer,
-        "mode": mode,
-        "model": model,
-        "dataset_size": dataset_size,
+        "optimizer": optimizer_key,
+        "mode": mode_key,
+        "model": model_key,
+        "dataset_size": dataset_size_int,
         "estimated_calls": total_calls,
         "estimated_input_tokens": total_input_tokens,
         "estimated_output_tokens": total_output_tokens,
@@ -89,7 +147,7 @@ def estimate_optimization_cost(
             "input_cost_usd": round(input_cost, 4),
             "output_cost_usd": round(output_cost, 4),
         },
-        "cost_hint": _generate_cost_hint(total_cost, mode),
+        "cost_hint": _generate_cost_hint(total_cost, mode_key),
     }
 
 
