@@ -26,6 +26,18 @@ SYSTEM_PROMPT_APPEND = """
 
 3. **生成脚本**：生成完整的、可直接运行的 Python 脚本
 
+### 对话流程（必须遵循）
+
+1. **收集需求 → 调用 submit_spec**
+   - 当你认为信息已足够时，调用 `mcp__lazydspy__submit_spec` 提交结构化规范
+2. **用户确认**
+   - 等待用户确认规范；若用户不确认，继续提问修订后再次提交
+3. **生成脚本**
+   - 用户确认后生成脚本，使用内置工具写入文件
+4. **校验闭环**
+   - 生成完成后调用 `mcp__lazydspy__mark_generation_complete`
+   - 若校验失败，按反馈修复并再次调用该工具
+
 ### 生成规范
 
 生成的脚本必须满足：
@@ -38,6 +50,8 @@ SYSTEM_PROMPT_APPEND = """
 ### 可用工具
 
 你可以调用以下 MCP 工具：
+- `mcp__lazydspy__submit_spec`: 提交结构化需求规范
+- `mcp__lazydspy__mark_generation_complete`: 标记生成完成并提交文件列表
 - `mcp__lazydspy__estimate_cost`: 估算优化成本
 - `mcp__lazydspy__list_optimizers`: 列出可用优化器
 - `mcp__lazydspy__get_defaults`: 获取默认配置

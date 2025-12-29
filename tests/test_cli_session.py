@@ -157,6 +157,57 @@ def test_estimate_cost_tool_invalid_mode() -> None:
     assert "参数错误" in text
 
 
+def test_submit_spec_tool() -> None:
+    """submit_spec should validate and store spec."""
+    from lazydspy.state import AgentState, ConversationStage
+    from lazydspy.tools import bind_state, submit_spec_impl
+
+    state = AgentState()
+    bind_state(state)
+
+    result = run_async(
+        submit_spec_impl(
+            {
+                "scenario": "优化问答任务",
+                "scenario_type": "qa",
+                "input_fields": ["question", "context"],
+                "output_fields": ["answer"],
+                "dataset_path": "data/train.jsonl",
+                "mode": "quick",
+            }
+        )
+    )
+
+    text = result["content"][0]["text"]
+    assert "已生成规范" in text
+    assert state.spec is not None
+    assert state.stage == ConversationStage.CONFIRM
+
+
+def test_mark_generation_complete_tool() -> None:
+    """mark_generation_complete should move state to validation."""
+    from lazydspy.specs import OptimizationSpec
+    from lazydspy.state import AgentState, ConversationStage
+    from lazydspy.tools import bind_state, mark_generation_complete_impl
+
+    state = AgentState(
+        spec=OptimizationSpec(
+            scenario="优化分类任务",
+            input_fields=["text"],
+            output_fields=["label"],
+            dataset_path="data/train.jsonl",
+        ),
+        stage=ConversationStage.GENERATE,
+    )
+    bind_state(state)
+
+    result = run_async(mark_generation_complete_impl({"files": ["generated/pipeline.py"]}))
+
+    text = result["content"][0]["text"]
+    assert "已记录生成文件" in text
+    assert state.stage == ConversationStage.VALIDATE
+
+
 def test_list_optimizers_tool() -> None:
     """list_optimizers tool should list all optimizers."""
     from lazydspy.tools import list_optimizers_impl
@@ -212,9 +263,11 @@ def test_tool_names_format() -> None:
     """TOOL_NAMES should have correct MCP format."""
     from lazydspy.tools import TOOL_NAMES
 
-    assert len(TOOL_NAMES) == 3
+    assert len(TOOL_NAMES) == 5
     for name in TOOL_NAMES:
         assert name.startswith("mcp__lazydspy__")
+    assert "mcp__lazydspy__submit_spec" in TOOL_NAMES
+    assert "mcp__lazydspy__mark_generation_complete" in TOOL_NAMES
 
 
 def test_create_mcp_server() -> None:
