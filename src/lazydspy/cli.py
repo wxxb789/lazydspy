@@ -180,6 +180,13 @@ async def _run_live_ui(config: AgentConfig, session_id: str) -> None:
 
                 agent._emit_event(GenerationCancelled())
                 raise
+            except Exception as exc:
+                # Ensure UI exits streaming loop on errors instead of hanging.
+                from lazydspy.tui.events import ErrorEvent, GenerationCompleted
+
+                error_message = f"{type(exc).__name__}: {exc}"
+                agent._emit_event(ErrorEvent(message=error_message))
+                agent._emit_event(GenerationCompleted())
 
         def cancel_generation() -> None:
             """Cancel current generation."""
