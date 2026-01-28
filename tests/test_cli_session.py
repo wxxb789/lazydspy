@@ -90,6 +90,22 @@ def test_estimate_cost_full_mode_higher() -> None:
     assert full["estimated_cost_usd"] > quick["estimated_cost_usd"]
 
 
+def test_estimate_cost_invalid_mode() -> None:
+    """Invalid mode should raise a clear error."""
+    from lazydspy.knowledge import estimate_optimization_cost
+
+    with pytest.raises(ValueError):
+        estimate_optimization_cost(optimizer="gepa", mode="fast", dataset_size=10)
+
+
+def test_estimate_cost_negative_dataset_size() -> None:
+    """Negative dataset sizes should be rejected."""
+    from lazydspy.knowledge import estimate_optimization_cost
+
+    with pytest.raises(ValueError):
+        estimate_optimization_cost(optimizer="gepa", mode="quick", dataset_size=-1)
+
+
 def test_list_supported_models() -> None:
     """Should list all supported models."""
     from lazydspy.knowledge import list_supported_models
@@ -122,6 +138,74 @@ def test_estimate_cost_tool() -> None:
     data = json.loads(text)
     assert "estimated_cost_usd" in data
     assert "cost_hint" in data
+
+
+def test_estimate_cost_tool_invalid_mode() -> None:
+    """estimate_cost tool should surface validation errors."""
+    from lazydspy.tools import estimate_cost_impl
+
+    result = run_async(
+        estimate_cost_impl(
+            {
+                "optimizer": "gepa",
+                "mode": "fast",
+            }
+        )
+    )
+
+    text = result["content"][0]["text"]
+    assert "参数错误" in text
+
+
+def test_submit_spec_tool() -> None:
+    """submit_spec should validate and store spec."""
+    from lazydspy.state import AgentState, ConversationStage
+    from lazydspy.tools import bind_state, submit_spec_impl
+
+    state = AgentState()
+    bind_state(state)
+
+    result = run_async(
+        submit_spec_impl(
+            {
+                "scenario": "优化问答任务",
+                "scenario_type": "qa",
+                "input_fields": ["question", "context"],
+                "output_fields": ["answer"],
+                "dataset_path": "data/train.jsonl",
+                "mode": "quick",
+            }
+        )
+    )
+
+    text = result["content"][0]["text"]
+    assert "已生成规范" in text
+    assert state.spec is not None
+    assert state.stage == ConversationStage.CONFIRM
+
+
+def test_mark_generation_complete_tool() -> None:
+    """mark_generation_complete should move state to validation."""
+    from lazydspy.specs import OptimizationSpec
+    from lazydspy.state import AgentState, ConversationStage
+    from lazydspy.tools import bind_state, mark_generation_complete_impl
+
+    state = AgentState(
+        spec=OptimizationSpec(
+            scenario="优化分类任务",
+            input_fields=["text"],
+            output_fields=["label"],
+            dataset_path="data/train.jsonl",
+        ),
+        stage=ConversationStage.GENERATE,
+    )
+    bind_state(state)
+
+    result = run_async(mark_generation_complete_impl({"files": ["generated/pipeline.py"]}))
+
+    text = result["content"][0]["text"]
+    assert "已记录生成文件" in text
+    assert state.stage == ConversationStage.VALIDATE
 
 
 def test_list_optimizers_tool() -> None:
@@ -179,9 +263,11 @@ def test_tool_names_format() -> None:
     """TOOL_NAMES should have correct MCP format."""
     from lazydspy.tools import TOOL_NAMES
 
-    assert len(TOOL_NAMES) == 3
+    assert len(TOOL_NAMES) == 5
     for name in TOOL_NAMES:
         assert name.startswith("mcp__lazydspy__")
+    assert "mcp__lazydspy__submit_spec" in TOOL_NAMES
+    assert "mcp__lazydspy__mark_generation_complete" in TOOL_NAMES
 
 
 def test_create_mcp_server() -> None:

@@ -12,6 +12,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from lazydspy import __version__
 from lazydspy.agent import Agent, AgentConfig
 
 console = Console()
@@ -39,6 +40,7 @@ def chat(
         typer.Option(
             "--debug",
             help="Enable debug mode",
+            envvar="LAZYDSPY_DEBUG",
         ),
     ] = False,
     workdir: Annotated[
@@ -88,11 +90,11 @@ def default_callback(
     ctx: typer.Context,
     model: Annotated[
         str | None,
-        typer.Option("--model", "-m", help="Claude model name"),
+        typer.Option("--model", "-m", help="Claude model name", envvar="ANTHROPIC_MODEL"),
     ] = None,
     debug: Annotated[
         bool,
-        typer.Option("--debug", help="Enable debug mode"),
+        typer.Option("--debug", help="Enable debug mode", envvar="LAZYDSPY_DEBUG"),
     ] = False,
     workdir: Annotated[
         Path | None,
@@ -108,7 +110,7 @@ def default_callback(
     Without a subcommand, runs chat by default.
     """
     if version:
-        console.print("lazydspy 0.2.0")
+        console.print(f"lazydspy {__version__}")
         raise typer.Exit(0)
 
     if ctx.invoked_subcommand is None:
