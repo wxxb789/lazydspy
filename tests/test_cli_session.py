@@ -197,8 +197,8 @@ def test_mark_generation_complete_tool() -> None:
             output_fields=["label"],
             dataset_path="data/train.jsonl",
         ),
-        stage=ConversationStage.GENERATE,
     )
+    state.stage = ConversationStage.GENERATE
     bind_state(state)
 
     result = run_async(mark_generation_complete_impl({"files": ["generated/pipeline.py"]}))
