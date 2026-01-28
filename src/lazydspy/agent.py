@@ -182,7 +182,13 @@ class Agent:
         - AssistantTextDelta for text blocks
         - ToolCallIssued/ToolCallFinished for tool use/result blocks
         """
-        from claude_agent_sdk import AssistantMessage, TextBlock, ToolResultBlock, ToolUseBlock
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ResultMessage,
+            TextBlock,
+            ToolResultBlock,
+            ToolUseBlock,
+        )
 
         response_text = ""
         message_id = self._next_message_id()
@@ -247,6 +253,8 @@ class Agent:
                                     is_error=is_error,
                                 )
                             )
+            elif isinstance(msg, ResultMessage):
+                break
 
         return response_text
 
