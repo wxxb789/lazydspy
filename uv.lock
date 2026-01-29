@@ -295,6 +295,7 @@ dependencies = [
     { name = "claude-agent-sdk" },
     { name = "prompt-toolkit" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -311,6 +312,7 @@ requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.1.17" },
     { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "python-dotenv" },
     { name = "rich" },
     { name = "typer", specifier = ">=0.12" },
 ]

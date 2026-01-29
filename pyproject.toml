@@ -8,6 +8,7 @@ dependencies = [
     "claude-agent-sdk>=0.1.17",
     "prompt_toolkit>=3.0",
     "pydantic>=2",
+    "python-dotenv",
     "rich",
     "typer>=0.12",
 ]

@@ -12,12 +12,30 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 
 from lazydspy import __version__
 
 if TYPE_CHECKING:
     from lazydspy.agent import AgentConfig
+
+
+def load_dotenv_from_cwd() -> None:
+    """Load .env from current working directory if it exists.
+
+    Uses override=False so existing environment variables are preserved.
+    Silently ignores missing files or errors.
+    """
+    try:
+        env_path = Path.cwd() / ".env"
+        load_dotenv(env_path, override=False)
+    except Exception:
+        pass  # Silent failure
+
+
+# Load .env at module import time (before any env var reads)
+load_dotenv_from_cwd()
 
 console = Console()
 
