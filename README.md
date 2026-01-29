@@ -210,6 +210,46 @@ export ANTHROPIC_API_KEY=your-key
 export ANTHROPIC_AUTH_TOKEN=your-token
 ```
 
+### Windows: CLI Hangs with No Output (WMI Issue)
+
+**Symptoms**:
+- `uv run lazydspy --version` or `uv run lazydspy chat` hangs with no output
+- Ctrl+C may not interrupt the process
+- Other Python commands work fine
+
+**Root Cause**:
+Windows WMI (Windows Management Instrumentation) service occasionally becomes unresponsive. The `claude_agent_sdk` calls `platform.win32_ver()` during import, which triggers a WMI query. When WMI is degraded, this query hangs indefinitely.
+
+**Quick Diagnosis**:
+
+```powershell
+# If this hangs, WMI is the problem:
+pwsh -NoProfile -Command "Get-CimInstance Win32_OperatingSystem"
+```
+
+**Quick Fix** (Administrator PowerShell required):
+
+```powershell
+# Restart WMI service
+Restart-Service winmgmt -Force
+```
+
+**If Quick Fix Doesn't Work**:
+
+```powershell
+# 1. Verify WMI repository consistency
+winmgmt /verifyrepository
+
+# 2. Attempt automatic repair
+winmgmt /salvagerepository
+
+# 3. Last resort - reset repository (WARNING: may lose custom WMI data)
+# winmgmt /resetrepository
+```
+
+**Why Python is Affected**:
+Python's `platform.win32_ver()` uses WMI queries to detect Windows version. The `claude_agent_sdk` calls this during import. When WMI hangs, the entire import chain blocks.
+
 ## License
 
 MIT

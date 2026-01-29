@@ -5,7 +5,10 @@ Uses preset + append mode to extend claude_code capabilities.
 
 from __future__ import annotations
 
-from claude_agent_sdk.types import SystemPromptPreset
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from claude_agent_sdk.types import SystemPromptPreset
 
 # Append to claude_code preset - focused on DSPy script generation
 SYSTEM_PROMPT_APPEND = """

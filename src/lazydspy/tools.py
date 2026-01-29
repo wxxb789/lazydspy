@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
 from pydantic import ValidationError
 
 from lazydspy.knowledge.cost_models import estimate_optimization_cost, list_supported_models
@@ -200,113 +199,6 @@ async def get_defaults_impl(args: dict[str, Any]) -> dict[str, Any]:
     return _make_text_response(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-# ============================================================================
-# MCP Tool Wrappers
-# ============================================================================
-
-
-@tool(
-    "submit_spec",
-    "提交优化需求的结构化规范",
-    {
-        "scenario": {"type": "string", "description": "优化场景描述"},
-        "scenario_type": {"type": "string", "description": "场景类型（可选）"},
-        "input_fields": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "输入字段列表",
-        },
-        "output_fields": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "输出字段列表",
-        },
-        "dataset_path": {"type": "string", "description": "JSONL 数据集路径"},
-        "dataset_size": {"type": "integer", "description": "数据集大小（可选）"},
-        "model": {"type": "string", "description": "模型名称（可选）"},
-        "optimizer": {"type": "string", "description": "优化器名称（可选）"},
-        "mode": {"type": "string", "description": "运行模式（可选）"},
-        "checkpoint_dir": {"type": "string", "description": "Checkpoint 目录（可选）"},
-        "resume": {"type": "boolean", "description": "是否断点续跑（可选）"},
-        "notes": {"type": "string", "description": "其他说明（可选）"},
-    },
-)
-async def submit_spec(args: dict[str, Any]) -> dict[str, Any]:
-    """Submit and validate the spec."""
-    return await submit_spec_impl(args)
-
-
-@tool(
-    "mark_generation_complete",
-    "标记脚本生成完成并提交文件列表",
-    {
-        "files": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "生成的文件路径列表",
-        },
-        "output_dir": {
-            "type": "string",
-            "description": "输出目录（可选，用于扫描 *.py）",
-        },
-    },
-)
-async def mark_generation_complete(args: dict[str, Any]) -> dict[str, Any]:
-    """Mark generation complete and register output files."""
-    return await mark_generation_complete_impl(args)
-
-
-@tool(
-    "estimate_cost",
-    "估算 DSPy 优化的成本（API 调用费用）",
-    {
-        "optimizer": {"type": "string", "description": "优化器名称: gepa 或 miprov2"},
-        "mode": {"type": "string", "description": "运行模式: quick 或 full"},
-        "dataset_size": {"type": "integer", "description": "数据集大小（样本数）"},
-        "model": {
-            "type": "string",
-            "description": "模型名称（可选，默认 claude-opus-4.5）",
-        },
-    },
-)
-async def estimate_cost(args: dict[str, Any]) -> dict[str, Any]:
-    """Estimate the cost of running a DSPy optimization."""
-    return await estimate_cost_impl(args)
-
-
-@tool(
-    "list_optimizers",
-    "列出所有可用的 DSPy 优化器及其信息",
-    {},
-)
-async def list_optimizers(args: dict[str, Any]) -> dict[str, Any]:
-    """List all available DSPy optimizers."""
-    return await list_optimizers_impl(args)
-
-
-@tool(
-    "get_defaults",
-    "获取优化器的默认配置",
-    {
-        "optimizer": {
-            "type": "string",
-            "description": "优化器名称: gepa 或 miprov2（可选）",
-        },
-        "mode": {
-            "type": "string",
-            "description": "运行模式: quick 或 full（可选，默认 quick）",
-        },
-        "scenario": {
-            "type": "string",
-            "description": "场景类型（可选，用于推荐优化器）",
-        },
-    },
-)
-async def get_defaults(args: dict[str, Any]) -> dict[str, Any]:
-    """Get default configuration for an optimizer."""
-    return await get_defaults_impl(args)
-
-
 # Tool names for allowed_tools configuration
 TOOL_NAMES = [
     "mcp__lazydspy__submit_spec",
@@ -318,7 +210,110 @@ TOOL_NAMES = [
 
 
 def create_mcp_server() -> Any:
-    """Create an MCP server with all lazydspy tools."""
+    """Create an MCP server with all lazydspy tools.
+
+    SDK imports are deferred to this function to avoid triggering
+    claude_agent_sdk import (and WMI calls on Windows) at module load time.
+    """
+    from claude_agent_sdk import create_sdk_mcp_server, tool
+
+    @tool(
+        "submit_spec",
+        "提交优化需求的结构化规范",
+        {
+            "scenario": {"type": "string", "description": "优化场景描述"},
+            "scenario_type": {"type": "string", "description": "场景类型（可选）"},
+            "input_fields": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "输入字段列表",
+            },
+            "output_fields": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "输出字段列表",
+            },
+            "dataset_path": {"type": "string", "description": "JSONL 数据集路径"},
+            "dataset_size": {"type": "integer", "description": "数据集大小（可选）"},
+            "model": {"type": "string", "description": "模型名称（可选）"},
+            "optimizer": {"type": "string", "description": "优化器名称（可选）"},
+            "mode": {"type": "string", "description": "运行模式（可选）"},
+            "checkpoint_dir": {"type": "string", "description": "Checkpoint 目录（可选）"},
+            "resume": {"type": "boolean", "description": "是否断点续跑（可选）"},
+            "notes": {"type": "string", "description": "其他说明（可选）"},
+        },
+    )
+    async def submit_spec(args: dict[str, Any]) -> dict[str, Any]:
+        """Submit and validate the spec."""
+        return await submit_spec_impl(args)
+
+    @tool(
+        "mark_generation_complete",
+        "标记脚本生成完成并提交文件列表",
+        {
+            "files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "生成的文件路径列表",
+            },
+            "output_dir": {
+                "type": "string",
+                "description": "输出目录（可选，用于扫描 *.py）",
+            },
+        },
+    )
+    async def mark_generation_complete(args: dict[str, Any]) -> dict[str, Any]:
+        """Mark generation complete and register output files."""
+        return await mark_generation_complete_impl(args)
+
+    @tool(
+        "estimate_cost",
+        "估算 DSPy 优化的成本（API 调用费用）",
+        {
+            "optimizer": {"type": "string", "description": "优化器名称: gepa 或 miprov2"},
+            "mode": {"type": "string", "description": "运行模式: quick 或 full"},
+            "dataset_size": {"type": "integer", "description": "数据集大小（样本数）"},
+            "model": {
+                "type": "string",
+                "description": "模型名称（可选，默认 claude-opus-4.5）",
+            },
+        },
+    )
+    async def estimate_cost(args: dict[str, Any]) -> dict[str, Any]:
+        """Estimate the cost of running a DSPy optimization."""
+        return await estimate_cost_impl(args)
+
+    @tool(
+        "list_optimizers",
+        "列出所有可用的 DSPy 优化器及其信息",
+        {},
+    )
+    async def list_optimizers(args: dict[str, Any]) -> dict[str, Any]:
+        """List all available DSPy optimizers."""
+        return await list_optimizers_impl(args)
+
+    @tool(
+        "get_defaults",
+        "获取优化器的默认配置",
+        {
+            "optimizer": {
+                "type": "string",
+                "description": "优化器名称: gepa 或 miprov2（可选）",
+            },
+            "mode": {
+                "type": "string",
+                "description": "运行模式: quick 或 full（可选，默认 quick）",
+            },
+            "scenario": {
+                "type": "string",
+                "description": "场景类型（可选，用于推荐优化器）",
+            },
+        },
+    )
+    async def get_defaults(args: dict[str, Any]) -> dict[str, Any]:
+        """Get default configuration for an optimizer."""
+        return await get_defaults_impl(args)
+
     return create_sdk_mcp_server(
         name="lazydspy",
         version="0.2.0",
@@ -334,15 +329,10 @@ def create_mcp_server() -> Any:
 
 __all__ = [
     "create_mcp_server",
-    "estimate_cost",
     "estimate_cost_impl",
-    "get_defaults",
     "get_defaults_impl",
-    "list_optimizers",
     "list_optimizers_impl",
-    "mark_generation_complete",
     "mark_generation_complete_impl",
-    "submit_spec",
     "submit_spec_impl",
     "bind_state",
     "TOOL_NAMES",

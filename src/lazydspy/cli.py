@@ -9,20 +9,28 @@ import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, cast
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 from rich.console import Console
 
 from lazydspy import __version__
-from lazydspy.agent import Agent, AgentConfig
+
+if TYPE_CHECKING:
+    from lazydspy.agent import AgentConfig
 
 console = Console()
 
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=False,
-    help="lazydspy - DSPy optimization script generator",
+    help="""lazydspy - DSPy optimization script generator
+
+Troubleshooting:
+
+  If the CLI hangs with no output on Windows, WMI service may be unresponsive.
+  Fix: Run 'Restart-Service winmgmt -Force' in Admin PowerShell.
+  See README.md for details.""",
 )
 
 
@@ -63,6 +71,10 @@ def chat(
         lazydspy chat
         lazydspy chat --model claude-sonnet-4-20250514
         lazydspy chat --debug
+
+    Troubleshooting:
+        If this command hangs on Windows, run in Admin PowerShell:
+        Restart-Service winmgmt -Force
     """
     # Validate API key
     api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
@@ -74,6 +86,9 @@ def chat(
             "  - ANTHROPIC_API_KEY"
         )
         raise typer.Exit(1)
+
+    # Lazy import to avoid SDK import for --version/--help
+    from lazydspy.agent import AgentConfig
 
     # Build config
     config = AgentConfig(
@@ -99,6 +114,7 @@ async def _run_live_ui(config: AgentConfig, session_id: str) -> None:
     # Lazy import to avoid loading UI dependencies unless chat is used
     from claude_agent_sdk import ClaudeSDKClient
 
+    from lazydspy.agent import Agent
     from lazydspy.tui.live_ui import LiveChatUI
 
     # Create UI
